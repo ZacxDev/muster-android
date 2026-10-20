@@ -25,9 +25,11 @@ date are given.
 **What an emulator cannot show:**
 
 - The emulator keystore is software: every key reported `securityLevel=0`
-  (SOFTWARE). On a real phone the same code yields TEE (1) or StrongBox (2)
-  keys. The **auth-binding behaviour** measured here is enforced by the
-  framework and keystore on both, but hardware backing is **not measured**.
+  (SOFTWARE). **S3 and S4 were measured on software keys only.** On a real
+  phone the same code is **expected** to yield TEE (1) or StrongBox (2) keys
+  with the same auth binding (per-use authentication, enrollment
+  invalidation). That is **expected, not measured**: neither hardware
+  backing nor how hardware keys behave was tested here.
 - The images ship old WebViews (124 and 133), and a `google_apis` image
   cannot update WebView. A real phone runs the current Play-updated WebView.
 - Lock-screen and biometric UI are AOSP/Pixel SystemUI. Other OEMs' skins are
@@ -41,7 +43,7 @@ date are given.
 | S4 | `AUTH_BIOMETRIC_STRONG \| AUTH_DEVICE_CREDENTIAL`, timeout 0, so a PIN-only phone can sign | **Works** on API 35 and 36, including on a phone with no biometric. **But** such a key is **not invalidated by a new biometric enrollment** (measured): weaker than the biometric-only key. |
 | S7 | Developer verification details | **Docs.** Sideloading is not affected yet; the global rollout is 2027. After that, an unregistered app installs **and updates** only with the advanced flow on (7 days or indefinitely) or by ADB. Whether each update warns, and whether silent self-update survives, is **UNKNOWN** (undocumented). |
 | S8 | Obtainium's unattended updates; F-Droid index v2 | **Source.** Obtainium installs silently only when it is the installer of record, on Android 12+, with targetSdk ≥ device SDK − 3 (else via Shizuku or root). fdroidserver still writes index v1 beside v2, so every client can read a self-hosted repo. |
-| S9 | ntfy and VAPID; ntfy's FGS type; embedded-FCM and Firebase | **Measured + source.** ntfy does **not** enforce VAPID on `up*` (bogus VAPID → 200). ntfy-android uses FGS type **`specialUse`**. The embedded-FCM distributor needs **no Firebase project** (v3.1.0). **New:** an `up*` publish over 4096 bytes is **accepted and silently truncated**. |
+| S9 | ntfy and VAPID; ntfy's FGS type; embedded-FCM and Firebase | **Measured + source.** ntfy does **not** enforce VAPID on `up*` (bogus VAPID → 200). ntfy-android uses FGS type **`specialUse`**. The embedded-FCM distributor needs **no Firebase project** (v3.1.0). **New:** an `up*` publish over the size limit (default 4K, configurable) is **accepted and silently truncated**. |
 | S10 | Does muster reach ntfy by the exact name in the phone's endpoint? | **Measured, mostly.** From the cluster muster runs on, the operator's ntfy host resolves through public DNS to the CDN, and an anonymous `up*` POST returns 200 on `https`/443. The endpoint's host is **whatever server the ntfy app is set to**, and it defaults to ntfy.sh. Not measured: a real phone's registration. |
 | S11 | Does the lock screen show only the public version of a `VISIBILITY_PRIVATE` notification? | **Only if the user's setting hides sensitive content.** With "show all notification content", the private text **is shown on the lock screen** (measured on API 35 and 36). |
 | S12 | CSS `env(safe-area-inset-*)` in an edge-to-edge WebView | **No** on WebView 124 and 133: defined but **0 px** on every side while the native insets are 51.8 dp (top) and 24 dp (bottom). The page drew under the status bar. Current WebView versions are **not measured**. |
@@ -73,8 +75,10 @@ S3 RESULT alias=s3-bio via=notification-action-activity variant=plain OK authTyp
 the notification posted; the action was tapped on the lock screen; then a
 finger was presented (`spikes/scripts/s3-locked.sh`). The system starts the
 activity at once, **behind the keyguard**, and shows the bouncer. The prompt
-is cancelled within about 100–150 ms. The finger then only unlocks the phone,
-and nothing is signed:
+is cancelled before the user can act on it: in five API 36 plain runs, the
+logcat timestamps of the `START` and `ERROR` lines were 16–147 ms apart (the
+API 35 runs logged only the result line). The finger then only unlocks the
+phone, and nothing is signed:
 
 ```
 S3 stepup-activity START via=notification-action-activity alias=s3-bio variant=plain sdk=36 ... keyguardLocked=true
@@ -289,7 +293,7 @@ fixed run.
 | Does ntfy require VAPID on `up*`? | **No** (measured, local and deployed) | Rows 1–3 above. Source: `server/server_auth.go` (`5e11f4fc`), `supportedAuthHeader` accepts only `Basic`/`Bearer`, "neither are things like 'WebPush', or 'vapid' (see #629)", so a VAPID header is treated as anonymous. The deployed server gave 200 to a bogus VAPID header too (S10). |
 | Which FGS type does the ntfy app use? | **`specialUse`** (source, spot-checked) | ntfy-android `a8427f56`, `AndroidManifest.xml` L111-115: `.service.SubscriberService` `android:foregroundServiceType="specialUse"` with a `PROPERTY_SPECIAL_USE_FGS_SUBTYPE`; permissions `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_SPECIAL_USE` (L7-8). |
 | Does the embedded-FCM distributor need a Firebase project? | **No** (source; not run) | codeberg `UnifiedPush/android-embedded_fcm_distributor` `d618c7ac` (v3.1.0): no Firebase dependency; it registers with the VAPID key as sender. `Module.md`: FCM accepts Web Push "out of the box, but they require a VAPID authorization. If your application supports VAPID, you have nothing special to do". It still needs Play services on the phone. |
-| What happens to an `up*` message over 4096 bytes? | **Accepted (200) and silently truncated to 4096 bytes** (measured) | Row 6. `DefaultMessageSizeLimit = 4096` (`server/config.go` L72). |
+| What happens to an `up*` message over the size limit? | **Accepted (200) and silently truncated to the limit** (measured at the default, 4096 bytes) | Row 6. The limit is ntfy's default `message-size-limit` (4K; `DefaultMessageSizeLimit = 4096`, `server/config.go` L72), which is **configurable**. The deployed server's value was **not measured**. |
 | `Topic` / `Urgency` / `TTL` headers | **Ignored** (source only) | No server code reads them on publish. |
 
 **Design consequences:**
@@ -299,13 +303,16 @@ fixed run.
    distributor. Anyone with the endpoint URL can publish, as the design
    already assumes. Keep `decrypted == false` → drop.
 2. **New server rule:** muster must refuse to send an `android` push whose
-   **encrypted** body exceeds 4096 bytes. The ntfy server truncates it with a
-   200, the phone fails to decrypt, and the message vanishes without an
-   error. The aes128gcm overhead is an 86-byte header plus a 16-byte tag, so
-   the plaintext budget is under about 3990 bytes. Payload v2's "ids, not
-   content" fits easily. Add a test that the sender refuses an over-budget
-   payload. The design's "4 KB budget … UNVERIFIED" becomes **measured: a
-   4096-byte hard limit, enforced by truncation**.
+   **encrypted** body exceeds 4096 bytes. Over its size limit, an ntfy server
+   truncates the body and still returns 200; the phone then fails to decrypt
+   it, and the message vanishes without an error. The aes128gcm overhead is
+   an 86-byte header plus a 16-byte tag, so the plaintext budget is under
+   about 3990 bytes. Payload v2's "ids, not content" fits easily. Add a test
+   that the sender refuses an over-budget payload. The design's "4 KB budget
+   … UNVERIFIED" becomes: **ntfy's default `message-size-limit` is 4K and is
+   configurable; over it, a body is truncated silently (measured at the
+   default). The deployed value was not measured.** A fixed 4096-byte cap in
+   muster is the conservative choice, whatever an operator configures.
 3. `specialUse` for ntfy means the ntfy app is not subject to Android 15's
    `dataSync` 6-hour cap. The battery figure is still ntfy's own claim, not
    measured.
@@ -319,8 +326,7 @@ fixed run.
 
 Run 2026-10-20 against the operator's ntfy host (served on `https`, 443,
 behind a CDN), from this development host and from a throwaway pod in the
-namespace muster runs in. No NetworkPolicy selects muster's pod, so the probe
-pod had the same egress and DNS.
+namespace muster runs in.
 
 | check | dev host | in cluster |
 |---|---|---|
@@ -403,8 +409,8 @@ and what real OEM images default to is **not measured** here.
    the lock screen for users with "show all content".
 4. Keep the per-device opt-in for WHAT (open question 4), but make it mean
    "WHAT when unlocked", never "WHAT on the lock screen".
-5. Launchers (notification dots and long-press previews) show content only
-   on an unlocked phone. They were not measured separately.
+5. Launchers (notification dots and long-press previews) are expected to
+   show content only on an unlocked phone. **Not measured.**
 
 ## S12: CSS safe-area insets in an edge-to-edge WebView (measured)
 
@@ -435,9 +441,12 @@ update WebView.
 
 1. **The shell pads**, not the page. Apply the system-bar, display-cutout and
    IME insets as padding on the WebView's container (or size the WebView to
-   the safe area). This works on every WebView version. A newer WebView that
-   does report `env()` then reports 0 inside the padded view, so nothing is
-   padded twice.
+   the safe area). The container must **consume** the insets it pads for
+   (return `WindowInsetsCompat.CONSUMED`, or the insets minus what it
+   applied), so the WebView is not handed them again and nothing is padded
+   twice. **UNVERIFIED:** that a newer WebView, which might report real
+   `env()` values, then reports 0 inside the padded, inset-consumed view.
+   Check it in the Phase 1 re-test below.
 2. If the page later wants to draw behind the bars (for colour), the bridge
    can send the inset values and the page can set CSS custom properties from
    them. That is a fifth bridge message, and is not needed now.
@@ -460,9 +469,10 @@ update WebView.
    lock screen when the user chose "show all content". Post WHAT only while
    unlocked, and downgrade on screen-off. This applies to held replies too.
    Open question 4 becomes "WHAT when unlocked".
-4. **Push size (S9):** ntfy truncates `up*` bodies over 4096 bytes and still
-   returns 200. muster must cap the encrypted body at 4096 bytes and refuse
-   larger sends. Replace the "4 KB … UNVERIFIED" line.
+4. **Push size (S9):** ntfy truncates `up*` bodies over its
+   `message-size-limit` (default 4K, configurable; the deployed value was not
+   measured) and still returns 200. muster must cap the encrypted body at
+   4096 bytes and refuse larger sends. Replace the "4 KB … UNVERIFIED" line.
 5. **VAPID (S9):** measured as not enforced by ntfy. The decrypted-only rule
    is the only sender check, so mark it load-bearing. Drop the `Topic`
    header improvement (ntfy ignores it). The embedded-FCM fallback needs no
@@ -472,8 +482,10 @@ update WebView.
    At pairing the app checks the endpoint's host against the expected push
    host, because the ntfy app's default server decides it and falls back to
    ntfy.sh.
-7. **Insets (S12):** the shell pads for insets. `env()` reads 0 on WebView
-   124 and 133. Remove the UNVERIFIED note; re-check on current WebView.
+7. **Insets (S12):** the shell pads for insets, and its container consumes
+   them so nothing is padded twice. `env()` reads 0 on WebView 124 and 133.
+   Replace the UNVERIFIED note with that, and keep current WebView's
+   behaviour as UNVERIFIED until Phase 1 re-checks it.
 8. **Distribution (S7, S8):** unregistered updates after 2027 need the
    advanced flow kept on (the 7-day option lapses). The in-app updater must
    surface that failure. Obtainium is silent only if it did the first
@@ -491,6 +503,10 @@ update WebView.
   source.
 - **S7 update behaviour after enforcement:** no image with enforcement exists
   to test against.
+- **S11's launcher part:** only the lock screen was measured. What launchers
+  show (notification dots, long-press previews) was not tested.
+- **The deployed ntfy's `message-size-limit`** was not measured (S9 measured
+  the default on a local server).
 - **S8 and the embedded-FCM part of S9** were read from source, not run.
 - **S1, S2 (Phase 7) and S6 (Phase 6)** were out of scope.
 

@@ -52,7 +52,7 @@ class StepUpActivity : FragmentActivity() {
         val text = "Approve and send the reply"
         val challenge = (
             "{\"nonce\":\"${Base64.encodeToString(nonce, Base64.NO_WRAP)}\"," +
-                "\"device\":\"dev-spike\",\"action\":\"send_now\",\"target\":\"q-42\"," +
+                "\"device\":\"dev-spike\",\"action\":\"queue_send_now\",\"target\":\"q-42\"," +
                 "\"text_sha256\":\"${sha256Hex(text)}\"}"
             ).toByteArray()
 

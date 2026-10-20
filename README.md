@@ -59,7 +59,11 @@ Gradle and checks the distribution's sha256.
 
 CI (`.github/workflows/ci.yml`) runs the unit tests and builds a
 **debug-signed** APK on every push and pull request. The debug key is the
-throwaway one AGP generates on the runner.
+throwaway one AGP generates on the runner. **CI uses the GitHub runner's
+Android SDK and a Temurin JDK 17, not the flake**: the flake would download
+the SDK on every run. compileSdk is pinned in Gradle and build-tools by the pinned AGP version, and AGP
+installs them on the runner if they are missing. The workflow's actions are
+pinned by commit SHA.
 
 ## Signing (read this before any release)
 
