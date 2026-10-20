@@ -1,0 +1,42 @@
+# Build output and caches
+build/
+.gradle/
+.kotlin/
+/local.properties
+/captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.idsig
+output-metadata.json
+# Nix
+result
+result-*
+.direnv/
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# ---- Signing material: NEVER committed ----------------------------------
+# The release key is generated and kept OFFLINE by the operator (README).
+*.jks
+*.keystore
+*.bks
+*.p12
+*.pfx
+*.pk8
+*.pem
+*.key
+*.der
+*.x509.pem
+*.lineage
+keystore.properties
+signing.properties
+release-signing.properties
+**/signing/
+**/keystores/
+debug.keystore
