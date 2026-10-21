@@ -2,7 +2,6 @@ package dev.zacx.muster.feature.shell
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
-import android.net.Uri
 import android.view.View
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -23,8 +22,9 @@ import java.time.Instant
  * - no file or content access, no `addJavascriptInterface`;
  * - the bridge is `WebViewCompat.addWebMessageListener` named `musterApp`,
  *   restricted to the exact origin (never `*`), main frame only;
- * - note attachments are refused at the top level and as subresources until
- *   muster sandboxes them (AttachmentGate).
+ * - uploaded files are refused at the top level and as subresources until
+ *   muster's sandbox is confirmed (AttachmentGate);
+ * - a download is handed to the browser, URL only ([DownloadHandoff]).
  */
 object ShellWebView {
     /** muster's ui.AppBridgeName. */
@@ -33,7 +33,8 @@ object ShellWebView {
     interface Callbacks {
         fun onBridgeMessage(message: BridgeMessage)
 
-        fun openExternally(uri: Uri)
+        /** Opens [url] in the user's browser (a Custom Tab). Only the URL crosses. */
+        fun openExternally(url: String)
 
         fun onBlockedAttachment()
 
@@ -54,6 +55,7 @@ object ShellWebView {
             setGeolocationEnabled(false)
         }
         webView.webViewClient = Client(policy, callbacks)
+        webView.setDownloadListener(DownloadHandoff(callbacks::openExternally))
 
         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
             WebViewCompat.addWebMessageListener(
@@ -75,7 +77,7 @@ object ShellWebView {
             val url = request.url.toString()
             return when (ShellNavigation.decide(url, policy)) {
                 ShellNavigation.Verdict.WEBVIEW -> false
-                ShellNavigation.Verdict.CUSTOM_TAB -> { cb.openExternally(request.url); true }
+                ShellNavigation.Verdict.CUSTOM_TAB -> { cb.openExternally(url); true }
                 ShellNavigation.Verdict.BLOCKED_ATTACHMENT -> { cb.onBlockedAttachment(); true }
                 ShellNavigation.Verdict.REFUSED -> true
             }

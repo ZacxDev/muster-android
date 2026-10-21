@@ -145,8 +145,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        override fun openExternally(uri: Uri) {
-            runCatching { CustomTabsIntent.Builder().build().launchUrl(this@MainActivity, uri) }
+        override fun openExternally(url: String) {
+            runOnUiThread {
+                runCatching { CustomTabsIntent.Builder().build().launchUrl(this@MainActivity, Uri.parse(url)) }
+            }
         }
 
         override fun onRendererGone(view: WebView) {

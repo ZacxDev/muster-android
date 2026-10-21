@@ -24,6 +24,14 @@ class AttachmentGateTest {
             "https://m.example.test/tasks/42/x/../attachments/7",
             "https://m.example.test/tasks/42/%61ttachments/7",
             "https://m.example.test/a/../tasks/42/attachments/7",
+            // The other two routes that serve uploaded bytes (muster #207).
+            "https://m.example.test/uploads/abc/file",
+            "https://m.example.test/Uploads/abc/File",
+            "https://m.example.test//uploads/abc//file",
+            "https://m.example.test/f/abc",
+            "https://m.example.test/f/abc.def?x=1",
+            "https://m.example.test/x/../f/abc",
+            "/f/abc",
         ).forEach { assertTrue(it, AttachmentGate.blocks(it)) }
     }
 
@@ -33,7 +41,10 @@ class AttachmentGateTest {
             "https://m.example.test/tasks/42",
             "https://m.example.test/tasks/42/comments",
             "https://m.example.test/attention",
-            "https://m.example.test/uploads/abc", // muster sandboxes these itself (uploads.go CSP)
+            "https://m.example.test/uploads/abc/revoke",
+            "https://m.example.test/f",
+            "https://m.example.test/f/",
+            "https://m.example.test/files/abc",
             "https://m.example.test/tasks/42?next=/tasks/1/attachments/2",
         ).forEach { assertFalse(it, AttachmentGate.blocks(it)) }
     }

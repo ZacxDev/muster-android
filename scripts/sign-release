@@ -78,10 +78,11 @@ if ! grep -qF "Verified using v2 scheme (APK Signature Scheme v2): true" <<<"$v2
     echo "sign-release: REFUSED: not verified using the v2 scheme" >&2
     exit 5
 fi
-# apksigner names the signer "Signer #1" or, in newer versions,
-# "Signer (minSdkVersion=…, maxSdkVersion=…)"; every signer line must carry
+# apksigner names the signer "Signer #1", "Signer (minSdkVersion=…)" or, in
+# build-tools 37 (apksigner 0.9), "V3.0 Signer:";
+# every signer line must carry
 # the same, expected certificate.
-digests=$(grep -E '^Signer .*certificate SHA-256 digest:' <<<"$report" | sed 's/.*digest: *//' | while read -r d; do printf '%s' "$d" | norm; echo; done | sort -u || true)
+digests=$(grep -E 'Signer[^:]*: *certificate SHA-256 digest:|^Signer .*certificate SHA-256 digest:' <<<"$report" | sed 's/.*digest: *//' | while read -r d; do printf '%s' "$d" | norm; echo; done | sort -u || true)
 if [[ -z "$digests" ]]; then
     echo "sign-release: REFUSED: apksigner reported no signer certificate" >&2
     printf '%s\n' "$report" >&2
