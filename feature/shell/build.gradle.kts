@@ -14,6 +14,8 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:net"))
+    implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.webkit)
     testImplementation(libs.junit)
 }

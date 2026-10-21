@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the launcher icon: the native phone settings (pairing state,
+     step-up key, push registration, unpair). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:shortcutId="phone_settings"
+        android:shortcutShortLabel="@string/shortcut_settings">
+        <intent
+            android:action="dev.zacx.muster.SETTINGS"
+            android:targetClass="dev.zacx.muster.MainActivity"
+            android:targetPackage="dev.zacx.muster" />
+    </shortcut>
+</shortcuts>

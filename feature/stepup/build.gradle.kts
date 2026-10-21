@@ -14,5 +14,6 @@ android {
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:auth"))
     implementation(libs.androidx.biometric)
 }

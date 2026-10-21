@@ -1,4 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">muster</string>
+    <string name="shortcut_settings">Phone settings</string>
+    <string name="pair_title">Pair this phone?</string>
+    <string name="pair_confirm">Pair this phone with the muster account signed in at %1$s. It will get notifications. Every action from this phone will ask for your fingerprint or face.</string>
+    <string name="pair_replaces">This phone is already paired. Pairing again replaces that pairing.</string>
+    <string name="pair_ok">Pair</string>
+    <string name="paired_title">Paired</string>
+    <string name="paired_biometric">This phone is paired. Its actions will ask for your biometric every time.</string>
+    <string name="pair_failed_title">Pairing failed</string>
+    <string name="unpaired">This phone is unpaired.</string>
+    <string name="attachment_blocked">Attachments do not open in the app yet.</string>
 </resources>
