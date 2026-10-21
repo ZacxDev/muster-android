@@ -36,6 +36,8 @@ data class DeviceRecord(
     /** The step-up key muster recorded, or null: read-only. */
     @SerialName("key_kind") val keyKind: String? = null,
     @SerialName("key_level") val keyLevel: String? = null,
+    /** The Keystore alias of this pairing's step-up key, or null: no key. */
+    @SerialName("key_alias") val keyAlias: String? = null,
     /** Why the phone is read-only or uses a PIN key, shown in its status. */
     @SerialName("key_note") val keyNote: String? = null,
     /**

@@ -1,5 +1,7 @@
 package dev.zacx.muster.core.auth
 
+import androidx.biometric.BiometricManager
+
 /**
  * Which step-up key a phone makes at pairing (docs/design/android.md, "The
  * step-up key", and open question 3, decided):
@@ -20,11 +22,35 @@ package dev.zacx.muster.core.auth
  */
 object StepUpPolicy {
     data class Capabilities(
-        /** BiometricManager.canAuthenticate(BIOMETRIC_STRONG) == SUCCESS. */
-        val strongBiometricEnrolled: Boolean,
+        /** What BiometricManager.canAuthenticate(BIOMETRIC_STRONG) said. */
+        val biometric: Biometric,
         /** KeyguardManager.isDeviceSecure: a PIN, pattern or password is set. */
         val deviceSecure: Boolean,
     )
+
+    /**
+     * The strong-biometric answer, reduced to what the choice needs. 🔴 ONLY
+     * "none enrolled" and "no hardware" say the phone has no strong
+     * biometric. Every other non-success (the sensor busy or unavailable, a
+     * security update required, unsupported, unknown) may be transient on a
+     * phone that HAS one, so it must not lead to a PIN key.
+     */
+    sealed interface Biometric {
+        data object Available : Biometric
+
+        /** BIOMETRIC_ERROR_NONE_ENROLLED or BIOMETRIC_ERROR_NO_HARDWARE. */
+        data object Absent : Biometric
+
+        /** Any other status: not known to be absent. */
+        data class Unavailable(val status: Int) : Biometric
+    }
+
+    /** Maps BiometricManager.canAuthenticate's status. */
+    fun biometricFrom(status: Int): Biometric = when (status) {
+        BiometricManager.BIOMETRIC_SUCCESS -> Biometric.Available
+        BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED, BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> Biometric.Absent
+        else -> Biometric.Unavailable(status)
+    }
 
     sealed interface Choice {
         data class Generate(val kind: KeyKind) : Choice
@@ -32,10 +58,11 @@ object StepUpPolicy {
         data class ReadOnly(val reason: String) : Choice
     }
 
-    fun choose(c: Capabilities): Choice = when {
-        c.strongBiometricEnrolled -> Choice.Generate(KeyKind.BIOMETRIC)
-        c.deviceSecure -> Choice.Generate(KeyKind.BIOMETRIC_OR_CREDENTIAL)
-        else -> Choice.ReadOnly(NO_LOCK)
+    fun choose(c: Capabilities): Choice = when (c.biometric) {
+        Biometric.Available -> Choice.Generate(KeyKind.BIOMETRIC)
+        is Biometric.Unavailable -> Choice.ReadOnly(BIOMETRIC_UNAVAILABLE)
+        Biometric.Absent ->
+            if (c.deviceSecure) Choice.Generate(KeyKind.BIOMETRIC_OR_CREDENTIAL) else Choice.ReadOnly(NO_LOCK)
     }
 
     /** Whether a key at [level] may be sent to muster as a step-up key. */
@@ -46,6 +73,8 @@ object StepUpPolicy {
 
     const val NO_LOCK =
         "This phone has no screen lock, so it cannot hold a step-up key. It is paired read-only: notifications, no actions."
+    const val BIOMETRIC_UNAVAILABLE =
+        "This phone's biometric could not be used just now, so no step-up key was made. It is paired read-only; re-pair to try again."
     const val SOFTWARE_KEY =
         "This phone's keystore is software-only, so its step-up key could not gate actions. It is paired read-only."
     const val KEY_FAILED =

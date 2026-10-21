@@ -10,5 +10,6 @@
     <string name="paired_biometric">This phone is paired. Its actions will ask for your biometric every time.</string>
     <string name="pair_failed_title">Pairing failed</string>
     <string name="unpaired">This phone is unpaired.</string>
+    <string name="config_failed">muster did not answer this phone: %1$s. It stays paired.</string>
     <string name="attachment_blocked">Attachments do not open in the app yet.</string>
 </resources>

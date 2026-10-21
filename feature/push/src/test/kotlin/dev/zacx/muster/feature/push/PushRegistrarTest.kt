@@ -18,6 +18,7 @@ class PushRegistrarTest {
     private val server = MockWebServer()
     private val token = "mdv_" + "T".repeat(43)
     private var forgot = 0
+    private var forgotAlias: String? = null
 
     @Before
     fun setUp() = server.start()
@@ -29,7 +30,7 @@ class PushRegistrarTest {
         DeviceRecord(origin = server.url("/").toString().trimEnd('/'), token = token, deviceId = 1, pushHosts = hosts)
 
     private fun registrar(store: InMemoryDeviceStore) =
-        PushRegistrar(store, ::DeviceApi, onForget = { forgot++ }, io = Dispatchers.IO)
+        PushRegistrar(store, ::DeviceApi, onForget = { forgot++; forgotAlias = it.keyAlias }, io = Dispatchers.IO)
 
     private fun json(code: Int, body: String) = MockResponse.Builder().code(code).body(body).build()
 
@@ -105,11 +106,23 @@ class PushRegistrarTest {
     /** muster ended the pairing (removed on Account → Devices, disabled, signed out everywhere). */
     @Test
     fun aRevokedDeviceForgetsItsPairingAndKey() = runTest {
-        server.enqueue(json(401, """{"error":"this route takes a paired device credential"}"""))
-        val store = InMemoryDeviceStore(paired().copy(keyKind = "biometric"))
+        server.enqueue(json(401, """{"error":"this route takes a paired device credential (mdv_…)"}"""))
+        val store = InMemoryDeviceStore(paired().copy(keyKind = "biometric", keyAlias = "muster-stepup-old"))
         assertEquals(PushRegistrar.ConfigResult.Revoked, registrar(store).refreshConfig())
         assertNull(store.value.token)
         assertNull(store.value.keyKind)
         assertEquals(1, forgot)
+        assertEquals("the forgotten pairing's own key is deleted", "muster-stepup-old", forgotAlias)
+    }
+
+    /** A proxy's or a bare 401 is an error, not a revocation: the pairing stays. */
+    @Test
+    fun aForeign401KeepsThePairing() = runTest {
+        server.enqueue(MockResponse.Builder().code(401).body("<h1>401 Authorization Required</h1>").build())
+        val store = InMemoryDeviceStore(paired().copy(keyKind = "biometric"))
+        val r = registrar(store).refreshConfig()
+        assertTrue("got $r", r is PushRegistrar.ConfigResult.Failed)
+        assertEquals(token, store.value.token)
+        assertEquals(0, forgot)
     }
 }

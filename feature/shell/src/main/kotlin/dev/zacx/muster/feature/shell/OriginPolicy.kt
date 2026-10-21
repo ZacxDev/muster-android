@@ -1,6 +1,6 @@
 package dev.zacx.muster.feature.shell
 
-import java.net.URI
+import dev.zacx.muster.core.model.LenientUrl
 
 /**
  * The shell's one-origin rule: the WebView navigates only within the muster
@@ -11,6 +11,9 @@ import java.net.URI
 class OriginPolicy private constructor(private val origin: Origin) {
 
     fun allowsInWebView(url: String): Boolean = parse(url) == origin
+
+    /** True when no parser can read [url]; every shell check blocks it. */
+    fun unparseable(url: String): Boolean = LenientUrl.parse(url) == null
 
     /** The exact origin string for `allowedOriginRules` (never `*`). */
     val allowedOriginRule: String get() = origin.toString()
@@ -24,7 +27,7 @@ class OriginPolicy private constructor(private val origin: Origin) {
         fun forServer(serverUrl: String): OriginPolicy? = parse(serverUrl)?.let(::OriginPolicy)
 
         private fun parse(url: String): Origin? {
-            val u = runCatching { URI(url) }.getOrNull() ?: return null
+            val u = LenientUrl.parse(url) ?: return null
             if (!u.scheme.equals("https", ignoreCase = true)) return null
             if (u.rawUserInfo != null) return null
             val host = u.host?.lowercase()?.trimEnd('.') ?: return null

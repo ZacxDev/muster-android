@@ -20,6 +20,7 @@ dependencies {
     implementation(project(":core:net"))
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.webkit)
+    api(libs.androidx.activity)
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)

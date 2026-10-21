@@ -39,18 +39,21 @@ object AttachmentGate {
         Regex("""^/f/.+$""", RegexOption.IGNORE_CASE),
     )
 
-    /** True when the shell must not load [pathOrUrl]. */
+    /**
+     * True when the shell must not load [pathOrUrl]. 🔴 FAILS CLOSED: a URL no
+     * parser can read ([LenientUrl]) is blocked.
+     */
     fun blocks(pathOrUrl: String, sandboxConfirmed: Boolean = SANDBOX_CONFIRMED): Boolean {
         if (sandboxConfirmed) return false
-        val path = pathOf(pathOrUrl) ?: return false
+        val path = pathOf(pathOrUrl) ?: return true
         return uploadPaths.any { it.matches(path) }
     }
 
     private fun pathOf(s: String): String? {
-        val u = runCatching { URI(s) }.getOrNull() ?: return null
+        val u = LenientUrl.parse(s) ?: return null
         // Decoded by URI. Repeated slashes collapsed first ("/tasks//1/attachments"
         // reaches the same handler, and a leading "//" would read as a host).
         val raw = (u.path ?: return null).replace(Regex("/{2,}"), "/")
-        return runCatching { URI(null, null, raw, null).normalize().path }.getOrNull() ?: raw
+        return runCatching { URI(null, null, raw, null).normalize().path }.getOrNull()
     }
 }

@@ -10,6 +10,7 @@ import android.webkit.WebViewClient
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
+import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import java.io.ByteArrayInputStream
@@ -27,6 +28,14 @@ import java.time.Instant
  * - a download is handed to the browser, URL only ([DownloadHandoff]).
  */
 object ShellWebView {
+    /**
+     * The message's text, or null for any message that is not a string (an
+     * ArrayBuffer, a future type). getData() throws on a non-string message,
+     * so the type is checked first.
+     */
+    fun bridgeData(message: WebMessageCompat): String? =
+        if (message.type == WebMessageCompat.TYPE_STRING) message.data else null
+
     /** muster's ui.AppBridgeName. */
     const val BRIDGE_NAME = "musterApp"
 
@@ -37,6 +46,19 @@ object ShellWebView {
         fun openExternally(url: String)
 
         fun onBlockedAttachment()
+
+        /**
+         * The page asked for files (`<input type=file>`): show the system
+         * picker for [mimeTypes] (empty: any) and call [deliver] once, with
+         * the picked URIs or null if cancelled.
+         */
+        fun chooseFiles(mimeTypes: List<String>, multiple: Boolean, deliver: (List<android.net.Uri>?) -> Unit)
+
+        /** A JS alert ([confirm] false) or confirm from muster: show it natively, then call [done] once. */
+        fun jsDialog(message: String, confirm: Boolean, done: (Boolean) -> Unit)
+
+        /** The WebView's history changed: re-sync back handling ([ShellBack.sync]). */
+        fun onHistoryChanged()
 
         /** The renderer crashed or was killed: drop this WebView and make a new one. */
         fun onRendererGone(view: WebView)
@@ -55,6 +77,7 @@ object ShellWebView {
             setGeolocationEnabled(false)
         }
         webView.webViewClient = Client(policy, callbacks)
+        webView.webChromeClient = ShellChromeClient(policy, callbacks)
         webView.setDownloadListener(DownloadHandoff(callbacks::openExternally))
 
         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
@@ -63,8 +86,10 @@ object ShellWebView {
                 BRIDGE_NAME,
                 setOf(policy.allowedOriginRule),
             ) { _, message, sourceOrigin, isMainFrame, _ ->
+                // muster's messages are JSON strings; anything else is ignored.
+                val data = bridgeData(message) ?: return@addWebMessageListener
                 callbacks.onBridgeMessage(
-                    BridgeMessage.parse(message.data, sourceOrigin.toString(), isMainFrame, policy, Instant.now()),
+                    BridgeMessage.parse(data, sourceOrigin.toString(), isMainFrame, policy, Instant.now()),
                 )
             }
         }
@@ -89,6 +114,10 @@ object ShellWebView {
                 view.stopLoading()
                 cb.onBlockedAttachment()
             }
+        }
+
+        override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+            cb.onHistoryChanged()
         }
 
         override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail): Boolean {

@@ -132,15 +132,32 @@ class DeviceApiTest {
         )
     }
 
+    /** Only muster's own device-token refusal (internal/api DeviceTokenRefusal) ends the pairing. */
     @Test
     fun a401MeansTheDeviceWasRevoked() {
-        server.enqueue(json(401, """{"error":"this route takes a paired device credential"}"""))
+        server.enqueue(json(401, """{"error":"this route takes a paired device credential (mdv_…)"}"""))
         assertEquals(DeviceApi.Result.Revoked, api.config(token))
         server.enqueue(json(422, """{"error":"the push endpoint did not accept a test push (status 404)"}"""))
         assertEquals(
             DeviceApi.Result.Failed(422, "the push endpoint did not accept a test push (status 404)"),
             api.putPush(token, DeviceApi.PushRegistration("https://push.example.test/upX", "pk", "au")),
         )
+    }
+
+    /**
+     * A 401 that is not muster's device refusal (a proxy's, an edge's, a bare
+     * one) keeps the credential: the phone shows an error, it does not unpair.
+     */
+    @Test
+    fun aForeign401DoesNotRevoke() {
+        server.enqueue(MockResponse.Builder().code(401).build())
+        server.enqueue(MockResponse.Builder().code(401).addHeader("Content-Type", "text/html").body("<h1>401 Authorization Required</h1>").build())
+        server.enqueue(json(401, """{"error":"unauthorized"}"""))
+        server.enqueue(json(401, """{"error":"this route takes a paired device credential"}"""))
+        repeat(4) {
+            val r = api.config(token)
+            assertTrue("got $r", r is DeviceApi.Result.Failed && r.status == 401)
+        }
     }
 
     /** The credential goes to the origin the user entered and nowhere else. */

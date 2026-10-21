@@ -17,6 +17,8 @@ object ShellNavigation {
     enum class Verdict { WEBVIEW, CUSTOM_TAB, BLOCKED_ATTACHMENT, REFUSED }
 
     fun decide(url: String, policy: OriginPolicy): Verdict = when {
+        // 🔴 Fail closed: what no parser can read goes nowhere.
+        policy.unparseable(url) -> Verdict.REFUSED
         policy.allowsInWebView(url) ->
             if (AttachmentGate.blocks(url)) Verdict.BLOCKED_ATTACHMENT else Verdict.WEBVIEW
         url.startsWith("https://", ignoreCase = true) -> Verdict.CUSTOM_TAB
@@ -26,10 +28,11 @@ object ShellNavigation {
     /**
      * A subresource request (an image, a frame, a fetch) the WebView must not
      * load. Only attachments on the muster origin are refused; other origins'
-     * subresources are the page's own business, under muster's CSP.
+     * subresources are the page's own business, under muster's CSP. A URL no
+     * parser can read is refused whatever its origin (fail closed).
      */
     fun blocksSubresource(url: String, policy: OriginPolicy): Boolean =
-        policy.allowsInWebView(url) && AttachmentGate.blocks(url)
+        policy.unparseable(url) || (policy.allowsInWebView(url) && AttachmentGate.blocks(url))
 
     /** The URL a notification tap opens, or null to open the server's home page. */
     fun tapTarget(path: String?, policy: OriginPolicy): String {

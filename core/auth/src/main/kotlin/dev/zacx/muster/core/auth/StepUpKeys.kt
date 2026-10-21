@@ -20,12 +20,12 @@ import java.security.spec.ECGenParameterSpec
 interface StepUpKeys {
     fun capabilities(): StepUpPolicy.Capabilities
 
-    /** Generates (replacing any previous) step-up key of [kind]. Throws on failure. */
-    fun generate(kind: KeyKind): GeneratedKey
+    /** Generates a step-up key of [kind] under [alias]. Throws on failure. */
+    fun generate(alias: String, kind: KeyKind): GeneratedKey
 
-    fun delete()
+    fun delete(alias: String)
 
-    fun state(): KeyState
+    fun state(alias: String): KeyState
 
     data class GeneratedKey(
         /** base64 SubjectPublicKeyInfo DER of the EC P-256 public key. */
@@ -36,8 +36,15 @@ interface StepUpKeys {
     enum class KeyState { ABSENT, VALID, INVALIDATED }
 
     companion object {
-        /** The Keystore alias. One step-up key per phone. */
-        const val ALIAS = "muster-stepup-v1"
+        /**
+         * A fresh Keystore alias for one pairing. Each pairing has its own, so
+         * a re-pairing can make its key while the old pairing's key still
+         * exists, and delete the old one only once the new pairing is made.
+         */
+        fun newAlias(): String {
+            val b = ByteArray(8).also { java.security.SecureRandom().nextBytes(it) }
+            return "muster-stepup-" + b.joinToString("") { "%02x".format(it) }
+        }
     }
 }
 
@@ -50,20 +57,19 @@ interface StepUpKeys {
 class KeystoreStepUpKeys(private val context: Context) : StepUpKeys {
 
     override fun capabilities(): StepUpPolicy.Capabilities {
-        val bio = BiometricManager.from(context)
-            .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG) == BiometricManager.BIOMETRIC_SUCCESS
+        val status = BiometricManager.from(context).canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
         val secure = context.getSystemService(KeyguardManager::class.java)?.isDeviceSecure == true
-        return StepUpPolicy.Capabilities(strongBiometricEnrolled = bio, deviceSecure = secure)
+        return StepUpPolicy.Capabilities(StepUpPolicy.biometricFrom(status), deviceSecure = secure)
     }
 
-    override fun generate(kind: KeyKind): StepUpKeys.GeneratedKey {
+    override fun generate(alias: String, kind: KeyKind): StepUpKeys.GeneratedKey {
         val auth = when (kind) {
             KeyKind.BIOMETRIC -> KeyProperties.AUTH_BIOMETRIC_STRONG
             KeyKind.BIOMETRIC_OR_CREDENTIAL ->
                 KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL
         }
         val spec = KeyGenParameterSpec.Builder(
-            StepUpKeys.ALIAS,
+            alias,
             KeyProperties.PURPOSE_SIGN or KeyProperties.PURPOSE_VERIFY,
         )
             .setAlgorithmParameterSpec(ECGenParameterSpec("secp256r1"))
@@ -82,8 +88,8 @@ class KeystoreStepUpKeys(private val context: Context) : StepUpKeys {
         )
     }
 
-    override fun delete() {
-        keyStore().deleteEntry(StepUpKeys.ALIAS)
+    override fun delete(alias: String) {
+        keyStore().deleteEntry(alias)
     }
 
     /**
@@ -91,8 +97,8 @@ class KeystoreStepUpKeys(private val context: Context) : StepUpKeys {
      * this phone"). initSign on a per-use key does not need an authentication,
      * but it does throw KeyPermanentlyInvalidatedException for a dead key.
      */
-    override fun state(): StepUpKeys.KeyState {
-        val key = keyStore().getKey(StepUpKeys.ALIAS, null) as? PrivateKey ?: return StepUpKeys.KeyState.ABSENT
+    override fun state(alias: String): StepUpKeys.KeyState {
+        val key = keyStore().getKey(alias, null) as? PrivateKey ?: return StepUpKeys.KeyState.ABSENT
         return try {
             Signature.getInstance("SHA256withECDSA").initSign(key)
             StepUpKeys.KeyState.VALID

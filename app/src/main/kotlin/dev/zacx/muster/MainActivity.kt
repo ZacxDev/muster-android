@@ -14,7 +14,6 @@ import android.webkit.WebView
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -31,6 +30,7 @@ import dev.zacx.muster.core.net.DeviceApi
 import dev.zacx.muster.feature.push.PushRegistrar
 import dev.zacx.muster.feature.shell.BridgeMessage
 import dev.zacx.muster.feature.shell.OriginPolicy
+import dev.zacx.muster.feature.shell.ShellBack
 import dev.zacx.muster.feature.shell.ShellNavigation
 import dev.zacx.muster.feature.shell.ShellWebView
 import dev.zacx.muster.push.MusterPushService
@@ -40,6 +40,7 @@ import dev.zacx.muster.ui.StatusBanner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.Instant
 import org.unifiedpush.android.connector.UnifiedPush
 
 /**
@@ -51,12 +52,31 @@ class MainActivity : ComponentActivity() {
     private var webView: WebView? = null
     private var policy: OriginPolicy? = null
 
+    /** The ONE back callback, registered once in onCreate (ShellBack). */
+    private val back = ShellBack { webView }
+
+    /** The page's pending file request: answered exactly once, null if cancelled or replaced. */
+    private var pendingFiles: ((List<Uri>?) -> Unit)? = null
+    private val openOne = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        answerFiles(uri?.let { listOf(it) })
+    }
+    private val openMany = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        answerFiles(uris)
+    }
+
+    private fun answerFiles(uris: List<Uri>?) {
+        val d = pendingFiles
+        pendingFiles = null
+        d?.invoke(uris)
+    }
+
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* the status screen shows the state */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        onBackPressedDispatcher.addCallback(this, back)
         lifecycleScope.launch { route(intent) }
     }
 
@@ -81,7 +101,7 @@ class MainActivity : ComponentActivity() {
     // --- first run --------------------------------------------------------------------
 
     private fun showServerUrl() {
-        webView = null
+        dropWebView()
         setContent {
             MaterialTheme {
                 ServerUrlScreen { url ->
@@ -124,12 +144,7 @@ class MainActivity : ComponentActivity() {
         ShellWebView.padForInsets(root)
         setContentView(root)
         webView = wv
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                val v = webView
-                if (v != null && v.canGoBack()) v.goBack() else { isEnabled = false; onBackPressedDispatcher.onBackPressed() }
-            }
-        })
+        back.sync()
         wv.loadUrl(target)
         if (record.paired) refreshPush(registerIfNeeded = record.pushStatus != PushStatus.REGISTERED)
     }
@@ -138,7 +153,7 @@ class MainActivity : ComponentActivity() {
         override fun onBridgeMessage(message: BridgeMessage) {
             runOnUiThread {
                 when (message) {
-                    is BridgeMessage.Pair -> confirmPairing(p.allowedOriginRule, message.code)
+                    is BridgeMessage.Pair -> confirmPairing(p.allowedOriginRule, message.code, message.expiresAt)
                     BridgeMessage.OpenNotificationSettings -> openNotificationSettings()
                     is BridgeMessage.Refused -> Unit
                 }
@@ -158,9 +173,37 @@ class MainActivity : ComponentActivity() {
                 if (webView === view) {
                     webView = null
                     policy = null
+                    back.sync()
                     lifecycleScope.launch { route(intent) }
                 }
             }
+        }
+
+        override fun chooseFiles(mimeTypes: List<String>, multiple: Boolean, deliver: (List<Uri>?) -> Unit) {
+            runOnUiThread {
+                answerFiles(null) // a newer request replaces an unanswered one
+                pendingFiles = deliver
+                val types = mimeTypes.ifEmpty { listOf("*/*") }.toTypedArray()
+                val launched = runCatching { if (multiple) openMany.launch(types) else openOne.launch(types) }
+                if (launched.isFailure) answerFiles(null) // no document picker on this phone
+            }
+        }
+
+        override fun jsDialog(message: String, confirm: Boolean, done: (Boolean) -> Unit) {
+            runOnUiThread {
+                var answered = false
+                fun answer(ok: Boolean) { if (!answered) { answered = true; done(ok) } }
+                AlertDialog.Builder(this@MainActivity)
+                    .setMessage(message)
+                    .setPositiveButton(android.R.string.ok) { _, _ -> answer(true) }
+                    .apply { if (confirm) setNegativeButton(android.R.string.cancel) { _, _ -> answer(false) } }
+                    .setOnDismissListener { answer(!confirm) } // an alert dismissed is acknowledged; a confirm dismissed is "no"
+                    .show()
+            }
+        }
+
+        override fun onHistoryChanged() {
+            runOnUiThread { back.sync() }
         }
 
         override fun onBlockedAttachment() {
@@ -172,7 +215,7 @@ class MainActivity : ComponentActivity() {
 
     // --- pairing ----------------------------------------------------------------------
 
-    private fun confirmPairing(origin: String, code: String) {
+    private fun confirmPairing(origin: String, code: String, expiresAt: Instant?) {
         lifecycleScope.launch {
             val already = app.store.read().paired
             val msg = getString(R.string.pair_confirm, origin) +
@@ -180,15 +223,16 @@ class MainActivity : ComponentActivity() {
             AlertDialog.Builder(this@MainActivity)
                 .setTitle(R.string.pair_title)
                 .setMessage(msg)
-                .setPositiveButton(R.string.pair_ok) { _, _ -> pair(origin, code) }
+                .setPositiveButton(R.string.pair_ok) { _, _ -> pair(origin, code, expiresAt) }
                 .setNegativeButton(android.R.string.cancel, null)
                 .show()
         }
     }
 
-    private fun pair(origin: String, code: String) {
+    private fun pair(origin: String, code: String, expiresAt: Instant?) {
         lifecycleScope.launch {
-            val out = app.pairing(origin).pair(code, MusterApp.deviceName(), appVersion())
+            // Pairing re-checks expires_at now, at the tap, before anything else.
+            val out = app.pairing(origin).pair(code, expiresAt, MusterApp.deviceName(), appVersion())
             val (title, text) = when (out) {
                 is Pairing.Outcome.Paired -> getString(R.string.paired_title) to
                     (out.note ?: getString(R.string.paired_biometric))
@@ -222,6 +266,11 @@ class MainActivity : ComponentActivity() {
                 runCatching { MusterPushService.unregister(this@MainActivity) }
                 return@launch
             }
+            if (r is PushRegistrar.ConfigResult.Failed) {
+                // Not a revocation (only muster's own refusal is): the pairing stays.
+                Toast.makeText(this@MainActivity, getString(R.string.config_failed, r.message), Toast.LENGTH_LONG).show()
+                return@launch
+            }
             if (r !is PushRegistrar.ConfigResult.Register || !registerIfNeeded) return@launch
             UnifiedPush.tryUseCurrentOrDefaultDistributor(this@MainActivity) { ok ->
                 when {
@@ -244,8 +293,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showSettings() {
-        webView = null
-        policy = null
+        dropWebView()
         setContent {
             MaterialTheme {
                 PhoneSettingsScreen(
@@ -265,8 +313,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun keyInvalidated(): Boolean = withContext(Dispatchers.IO) {
-        app.store.read().keyKind != null &&
-            runCatching { app.keys.state() }.getOrNull() != dev.zacx.muster.core.auth.StepUpKeys.KeyState.VALID
+        val alias = app.store.read().keyAlias
+        alias != null && runCatching { app.keys.state(alias) }.getOrNull() != dev.zacx.muster.core.auth.StepUpKeys.KeyState.VALID
     }
 
     private fun unpair() {
@@ -277,7 +325,7 @@ class MainActivity : ComponentActivity() {
                 withContext(Dispatchers.IO) { runCatching { DeviceApi(origin).unpair(token) } }
             }
             runCatching { MusterPushService.unregister(this@MainActivity) }
-            withContext(Dispatchers.IO) { runCatching { app.keys.delete() } }
+            r.keyAlias?.let { a -> withContext(Dispatchers.IO) { runCatching { app.keys.delete(a) } } }
             app.store.update(DeviceRecord::unpaired)
             Toast.makeText(this@MainActivity, R.string.unpaired, Toast.LENGTH_LONG).show()
         }
@@ -303,9 +351,19 @@ class MainActivity : ComponentActivity() {
         runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "?"
 
     override fun onDestroy() {
-        webView?.destroy()
-        webView = null
+        dropWebView()
         super.onDestroy()
+    }
+
+    /** Detaches and DESTROYS the shell's WebView (its renderer, its page), and re-syncs back. */
+    private fun dropWebView() {
+        webView?.let { v ->
+            (v.parent as? ViewGroup)?.removeView(v)
+            v.destroy()
+        }
+        webView = null
+        policy = null
+        back.sync()
     }
 
     companion object {

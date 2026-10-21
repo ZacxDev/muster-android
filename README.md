@@ -24,12 +24,18 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   `addJavascriptInterface`) with password sign-in on muster's own page. The
   native container pads for the system bars, cutout and keyboard, because CSS
   `env(safe-area-inset-*)` reads 0 in a WebView (Phase 0, S12).
+- **In the shell:** back follows the WebView's history; `<input type=file>`
+  opens the system picker and hands the page `content://` URIs only; muster's
+  `alert`/`confirm` are native dialogs. A URL the shell cannot parse is
+  refused, never waved through.
 - **The bridge:** `musterApp`, a `WebViewCompat.addWebMessageListener`
   restricted to the exact origin, main frame only. It understands the two
   messages muster sends: `pair` and `open-notification-settings`.
 - **Pairing:** Account → Devices → **Pair this phone** hands the app a
-  one-time code; the app asks you to confirm, makes the step-up key, and
-  redeems the code at `POST /api/device/pair`.
+  one-time code; the app asks you to confirm, re-checks the code's expiry,
+  makes the step-up key, and redeems the code at `POST /api/device/pair`.
+  Re-pairing redeems first and removes the old pairing only once the new one
+  exists.
 - **The step-up key:** EC P-256 in the Android Keystore, a fresh strong
   biometric on every use, destroyed by a new enrolment. A phone without a
   strong biometric offers a biometric-or-PIN key, which muster accepts only

@@ -27,6 +27,9 @@ class DownloadHandoffTest {
         override fun openExternally(url: String) { handedOff += url }
         override fun onBlockedAttachment() = Unit
         override fun onRendererGone(view: WebView) = Unit
+        override fun chooseFiles(mimeTypes: List<String>, multiple: Boolean, deliver: (List<android.net.Uri>?) -> Unit) = Unit
+                override fun jsDialog(message: String, confirm: Boolean, done: (Boolean) -> Unit) = Unit
+                override fun onHistoryChanged() = Unit
     }
 
     /** The seam: the shell's WebView really has the listener, and it hands off. */

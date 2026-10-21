@@ -20,7 +20,7 @@ class BridgeAndNavigationTest {
     @Test
     fun mustersMessagesAreUnderstood() {
         assertEquals(
-            BridgeMessage.Pair(code),
+            BridgeMessage.Pair(code, Instant.parse("2026-10-21T12:01:00Z")),
             parse("""{"type":"pair","code":"$code","expires_at":"2026-10-21T12:01:00Z"}"""),
         )
         assertEquals(BridgeMessage.OpenNotificationSettings, parse("""{"type":"open-notification-settings"}"""))

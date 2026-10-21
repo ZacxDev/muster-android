@@ -133,7 +133,10 @@ class DeviceApi(
     sealed interface Result<out T> {
         data class Ok<T>(val value: T) : Result<T>
 
-        /** 401: the credential was refused (removed, disabled, signed out). Unpair locally. */
+        /**
+         * 401 with muster's device refusal body: the credential was refused
+         * (removed, disabled, signed out). Unpair locally.
+         */
         data object Revoked : Result<Nothing>
 
         data class Failed(val status: Int, val message: String) : Result<Nothing>
@@ -173,7 +176,11 @@ class DeviceApi(
     private fun <T> answer(r: Response, parse: (String) -> T): Result<T> {
         val text = r.body.string()
         return when {
-            r.code == 401 -> Result.Revoked
+            // 🔴 Only muster's own refusal ends the pairing. A bare 401, or
+            // one from a proxy or an edge in front of muster, is an error:
+            // forgetting the credential on it would unpair the phone for a
+            // fault that is not muster's answer.
+            r.code == 401 && errorOf(text) == DEVICE_TOKEN_REFUSAL -> Result.Revoked
             r.code in 200..299 -> runCatching { Result.Ok(parse(text)) }
                 .getOrElse { Result.Failed(r.code, "muster's answer could not be read") }
             else -> Result.Failed(r.code, errorOf(text).ifEmpty { "muster answered ${r.code}" })
@@ -189,6 +196,9 @@ class DeviceApi(
     private data class ErrorBody(val error: String = "")
 
     companion object {
+        /** muster's internal/api DeviceTokenRefusal, exactly. */
+        const val DEVICE_TOKEN_REFUSAL = "this route takes a paired device credential (mdv_…)"
+
         private val JSON = "application/json".toMediaType()
         private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 

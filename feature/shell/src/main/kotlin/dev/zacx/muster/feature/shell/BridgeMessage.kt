@@ -23,7 +23,8 @@ import java.time.format.DateTimeParseException
  * for POST_NOTIFICATIONS itself right after pairing.
  */
 sealed interface BridgeMessage {
-    data class Pair(val code: String) : BridgeMessage
+    /** [expiresAt] is re-checked when the user taps Pair, not only on arrival. */
+    data class Pair(val code: String, val expiresAt: Instant?) : BridgeMessage
 
     data object OpenNotificationSettings : BridgeMessage
 
@@ -62,7 +63,7 @@ sealed interface BridgeMessage {
                         try { Instant.parse(it) } catch (e: DateTimeParseException) { null }
                     }
                     if (exp != null && !exp.isAfter(now)) return Refused("the pairing code has expired")
-                    Pair(code)
+                    Pair(code, exp)
                 }
                 "open-notification-settings" -> OpenNotificationSettings
                 else -> Refused("unknown message")

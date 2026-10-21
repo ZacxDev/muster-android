@@ -5,6 +5,7 @@ import dev.zacx.muster.core.net.DeviceApi
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.time.Instant
 
 /**
  * Redeems a pairing code for the device credential (docs/design/android.md,
@@ -12,19 +13,19 @@ import kotlinx.coroutines.withContext
  * "Paired devices").
  *
  * The code arrives from muster's Account → Devices page over the WebView
- * bridge. This class:
+ * bridge. At the user's Pair tap this class:
  *
- * 1. refuses a string that is not shaped like a pairing code, before any
- *    network call;
- * 2. unpairs the phone's previous pairing, if any (one pairing per phone, and
- *    there is one step-up key alias to replace);
- * 3. picks the step-up key by [StepUpPolicy], generates it, and drops it if
- *    the Keystore reports it as software-only;
- * 4. redeems the code with the key's public half, type and level;
- * 5. if muster refuses the KEY (403, which does not spend the code), deletes
+ * 1. refuses a string that is not shaped like a pairing code, and a code
+ *    whose `expires_at` has passed, before any network call or key;
+ * 2. picks the step-up key by [StepUpPolicy] and generates it under a NEW
+ *    alias, dropping it if the Keystore reports it as software-only;
+ * 3. redeems the code with the key's public half, type and level;
+ * 4. if muster refuses the KEY (403, which does not spend the code), deletes
  *    it and redeems the same code read-only, saying why;
- * 6. stores the credential in the sealed [DeviceStore], and never anywhere
- *    else.
+ * 5. 🔴 ONLY ONCE THE NEW PAIRING EXISTS, unpairs the phone's previous pairing
+ *    with ITS credential and deletes ITS key. A refused, expired or failed
+ *    re-pairing ("Re-confirm this phone") leaves the old pairing intact;
+ * 6. stores the credential in the sealed [DeviceStore], and nowhere else.
  *
  * Every non-biometric outcome carries a [Outcome.Paired.note] the UI shows:
  * the phone never becomes read-only, or PIN-gated, without saying so.
@@ -34,6 +35,8 @@ class Pairing(
     private val keys: StepUpKeys,
     private val store: DeviceStore,
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    private val now: () -> Instant = Instant::now,
+    private val newAlias: () -> String = StepUpKeys::newAlias,
 ) {
     sealed interface Outcome {
         data class Paired(
@@ -47,29 +50,22 @@ class Pairing(
         data class Failed(val message: String) : Outcome
     }
 
-    suspend fun pair(code: String, deviceName: String, appVersion: String): Outcome {
+    /** @param expiresAt the code's `expires_at` from the bridge message, if it had one. */
+    suspend fun pair(code: String, expiresAt: Instant?, deviceName: String, appVersion: String): Outcome {
         if (!CredentialShape.codeOk(code)) return Outcome.Failed("That is not a pairing code.")
+        if (expiresAt != null && !expiresAt.isAfter(now())) return Outcome.Failed(EXPIRED)
 
-        val before = store.read()
-        before.token?.let { old ->
-            // Best effort: if muster cannot be reached the old row stays on
-            // Account → Devices until removed there; the phone forgets it now.
-            runCatching { withContext(io) { api.unpair(old) } }
-            store.update { it.unpaired() }
-            // Its step-up key goes with it, even if this pairing ends read-only.
-            deleteKey()
-        }
-
+        val alias = newAlias()
         var note: String? = null
         var key: StepUpKeys.GeneratedKey? = null
         var kind: KeyKind? = null
         when (val choice = StepUpPolicy.choose(keys.capabilities())) {
             is StepUpPolicy.Choice.ReadOnly -> note = choice.reason
             is StepUpPolicy.Choice.Generate -> {
-                val made = runCatching { withContext(io) { keys.generate(choice.kind) } }.getOrNull()
+                val made = runCatching { withContext(io) { keys.generate(alias, choice.kind) } }.getOrNull()
                 when {
-                    made == null -> { deleteKey(); note = StepUpPolicy.KEY_FAILED }
-                    !StepUpPolicy.acceptsLevel(made.level) -> { deleteKey(); note = StepUpPolicy.SOFTWARE_KEY }
+                    made == null -> { deleteKey(alias); note = StepUpPolicy.KEY_FAILED }
+                    !StepUpPolicy.acceptsLevel(made.level) -> { deleteKey(alias); note = StepUpPolicy.SOFTWARE_KEY }
                     else -> { key = made; kind = choice.kind }
                 }
             }
@@ -77,7 +73,7 @@ class Pairing(
 
         var result = withContext(io) { api.pair(request(code, deviceName, appVersion, key, kind)) }
         if (result is DeviceApi.PairResult.KeyRefused && key != null) {
-            deleteKey()
+            deleteKey(alias)
             note = if (kind == KeyKind.BIOMETRIC_OR_CREDENTIAL) {
                 "This phone has no strong biometric, and this muster server does not accept PIN keys. It is paired read-only."
             } else {
@@ -88,31 +84,39 @@ class Pairing(
             result = withContext(io) { api.pair(request(code, deviceName, appVersion, null, null)) }
         }
 
-        return when (result) {
-            is DeviceApi.PairResult.Paired -> {
-                // Trust muster's record of what it stored, not what was sent.
-                val recorded = if (result.device.stepUpKey) KeyKind.fromWire(result.device.stepUpKeyType) else null
-                if (recorded == null && key != null) {
-                    deleteKey()
-                    note = note ?: "muster did not record this phone's step-up key. It is paired read-only."
-                }
-                if (recorded == KeyKind.BIOMETRIC_OR_CREDENTIAL && note == null) note = StepUpPolicy.PIN_KEY
-                store.update {
-                    it.unpaired().copy(
-                        token = result.token,
-                        deviceId = result.device.id,
-                        keyKind = recorded?.wire,
-                        keyLevel = if (recorded != null) result.device.stepUpKeyLevel else null,
-                        keyNote = note,
-                    )
-                }
-                Outcome.Paired(result.device.id, recorded, note)
-            }
-            else -> {
-                if (key != null) deleteKey()
-                Outcome.Failed(failureMessage(result))
-            }
+        if (result !is DeviceApi.PairResult.Paired) {
+            if (key != null) deleteKey(alias)
+            return Outcome.Failed(failureMessage(result))
         }
+
+        // Trust muster's record of what it stored, not what was sent.
+        val recorded = if (result.device.stepUpKey) KeyKind.fromWire(result.device.stepUpKeyType) else null
+        if (recorded == null && key != null) {
+            deleteKey(alias)
+            note = note ?: "muster did not record this phone's step-up key. It is paired read-only."
+        }
+        if (recorded == KeyKind.BIOMETRIC_OR_CREDENTIAL && note == null) note = StepUpPolicy.PIN_KEY
+
+        // The new pairing exists: only now does the old one go.
+        var old = DeviceRecord()
+        store.update {
+            old = it
+            it.unpaired().copy(
+                token = result.token,
+                deviceId = result.device.id,
+                keyKind = recorded?.wire,
+                keyLevel = if (recorded != null) result.device.stepUpKeyLevel else null,
+                keyAlias = if (recorded != null) alias else null,
+                keyNote = note,
+            )
+        }
+        old.token?.let { oldToken ->
+            // Best effort: if muster cannot be reached the old row stays on
+            // Account → Devices until it is removed there.
+            runCatching { withContext(io) { api.unpair(oldToken) } }
+        }
+        old.keyAlias?.takeIf { it != alias }?.let(::deleteKey)
+        return Outcome.Paired(result.device.id, recorded, note)
     }
 
     private fun request(code: String, name: String, version: String, key: StepUpKeys.GeneratedKey?, kind: KeyKind?) =
@@ -125,8 +129,12 @@ class Pairing(
             stepUpKeyLevel = key?.level?.wire,
         )
 
-    private fun deleteKey() {
-        runCatching { keys.delete() }
+    private fun deleteKey(alias: String) {
+        runCatching { keys.delete(alias) }
+    }
+
+    companion object {
+        const val EXPIRED = "The pairing code has expired. Tap Pair this phone again."
     }
 
     private fun failureMessage(r: DeviceApi.PairResult): String = when (r) {
