@@ -31,16 +31,20 @@ norm() { tr -d ': \n' | tr '[:upper:]' '[:lower:]'; }
 want=$(printf '%s' "$want" | norm)
 [[ "$want" =~ ^[0-9a-f]{64}$ ]] || { echo "sign-release: the expected certificate SHA-256 must be 64 hex digits" >&2; exit 2; }
 
-tool() {
-    if command -v "$1" >/dev/null 2>&1; then command -v "$1"; return; fi
-    local sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}
-    local found
-    found=$(ls -d "$sdk"/build-tools/*/ 2>/dev/null | sort -V | tail -1)
-    [[ -n "$found" && -x "$found/$1" ]] || { echo "sign-release: $1 not found (PATH or \$ANDROID_HOME/build-tools)" >&2; exit 2; }
-    printf '%s\n' "$found/$1"
-}
-zipalign=$(tool zipalign)
-apksigner=$(tool apksigner)
+# The build-tools to use: PATH first, else the newest one under the SDK whose
+# apksigner RUNS on this JDK (a newer build-tools can need a newer Java than
+# the one the build uses, and would fail every signing).
+bt=""
+if command -v apksigner >/dev/null 2>&1 && command -v zipalign >/dev/null 2>&1; then
+    zipalign=$(command -v zipalign) apksigner=$(command -v apksigner)
+else
+    sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}
+    while read -r d; do
+        if [[ -x "$d/apksigner" && -x "$d/zipalign" ]] && "$d/apksigner" version >/dev/null 2>&1; then bt=$d; break; fi
+    done < <(ls -d "$sdk"/build-tools/*/ 2>/dev/null | sed 's:/$::' | sort -rV)
+    [[ -n "$bt" ]] || { echo "sign-release: no runnable apksigner and zipalign (PATH or \$ANDROID_HOME/build-tools)" >&2; exit 2; }
+    zipalign=$bt/zipalign apksigner=$bt/apksigner
+fi
 
 if [[ -n "${APK_SHA256:-}" ]]; then
     got=$(sha256sum "$in" | cut -d' ' -f1)

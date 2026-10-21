@@ -20,7 +20,7 @@ export KS_PASS=env:TEST_KS_PASS
 
 pass=0 fail=0
 check() { # name, want-exit, got-exit
-    if [[ "$2" == "$3" ]]; then echo "ok   $1"; pass=$((pass + 1)); else echo "FAIL $1: exit $3, want $2"; fail=$((fail + 1)); fi
+    if [[ "$2" == "$3" ]]; then echo "ok   $1"; pass=$((pass + 1)); else echo "FAIL $1: exit $3, want $2"; sed 's/^/     | /' "$tmp/log"; fail=$((fail + 1)); fi
 }
 
 set +e
