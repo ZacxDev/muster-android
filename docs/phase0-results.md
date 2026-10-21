@@ -1,5 +1,9 @@
 # Phase 0 spike results
 
+> The `spikes/` paths below refer to the spike app as it was at commit
+> [`f652f32`](https://github.com/ZacxDev/muster-android/tree/f652f3256bbe487e9babb467e5f509a41ef54068/spikes);
+> it was removed from the build in Phase 1.
+
 Spikes for muster's
 [`docs/design/android.md`](https://github.com/ZacxDev/muster/blob/main/docs/design/android.md)
 (section "Phase 0 spikes"). S1 and S2 belong to Phase 7, and S6 to Phase 6;

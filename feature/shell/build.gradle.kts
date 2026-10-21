@@ -10,10 +10,18 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 dependencies {
     implementation(project(":core:model"))
+    implementation(project(":core:net"))
+    implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.webkit)
+    api(libs.androidx.activity)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.androidx.test.core)
 }

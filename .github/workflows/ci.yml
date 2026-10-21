@@ -36,6 +36,14 @@ jobs:
       - name: Debug APKs
         run: ./gradlew --no-daemon assembleDebug
 
+      # The UNSIGNED release APK, and the offline signing script exercised
+      # against it with a throwaway key made and deleted inside the test.
+      # Nothing here is a release: no release key exists in CI.
+      - name: Unsigned release APK and the signing script's test
+        run: |
+          ./gradlew --no-daemon assembleRelease
+          scripts/tests/sign-release-test.sh
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: app-debug

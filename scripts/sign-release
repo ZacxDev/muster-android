@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# sign-release: sign an UNSIGNED release APK offline, on the machine that
+# holds the release key (muster docs/design/android.md, "Release pipeline",
+# step 3). Never run in CI: CI never holds the release key.
+#
+#   scripts/sign-release <unsigned.apk> <keystore> <key-alias> <expected-cert-sha256> [out.apk]
+#
+# 1. optionally checks the unsigned APK's sha256 (APK_SHA256=<hex>), the one
+#    published next to it on the draft GitHub Release;
+# 2. zipalign -p 4;
+# 3. apksigner sign with the v2 and v3 schemes (v1 is off: minSdk is 30);
+# 4. apksigner verify --print-certs, and refuses the output unless v2 and v3
+#    verify AND the signer's certificate SHA-256 equals <expected-cert-sha256>,
+#    the fingerprint the operator recorded when the key was made.
+#
+# The keystore password is asked for by apksigner itself, unless KS_PASS is
+# set to an apksigner password spec (`env:NAME`, `file:/path`, `stdin`).
+# Exit codes: 0 signed and verified; 2 usage; 3 the input sha256 is wrong;
+# 4 the certificate is not the expected one; 5 a scheme did not verify.
+set -euo pipefail
+
+usage() { sed -n '2,20p' "$0" >&2; exit 2; }
+[[ $# -ge 4 && $# -le 5 ]] || usage
+in=$1 ks=$2 alias=$3 want=$4
+out=${5:-${in%-unsigned.apk}-signed.apk}
+[[ "$out" != "$in" ]] || out="${in%.apk}-signed.apk"
+[[ -f "$in" ]] || { echo "sign-release: no such APK: $in" >&2; exit 2; }
+[[ -f "$ks" ]] || { echo "sign-release: no such keystore: $ks" >&2; exit 2; }
+
+norm() { tr -d ': \n' | tr '[:upper:]' '[:lower:]'; }
+want=$(printf '%s' "$want" | norm)
+[[ "$want" =~ ^[0-9a-f]{64}$ ]] || { echo "sign-release: the expected certificate SHA-256 must be 64 hex digits" >&2; exit 2; }
+
+# The build-tools to use: PATH first, else the newest one under the SDK whose
+# apksigner RUNS on this JDK (a newer build-tools can need a newer Java than
+# the one the build uses, and would fail every signing).
+bt=""
+if command -v apksigner >/dev/null 2>&1 && command -v zipalign >/dev/null 2>&1; then
+    zipalign=$(command -v zipalign) apksigner=$(command -v apksigner)
+else
+    sdk=${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}
+    while read -r d; do
+        if [[ -x "$d/apksigner" && -x "$d/zipalign" ]] && "$d/apksigner" version >/dev/null 2>&1; then bt=$d; break; fi
+    done < <(ls -d "$sdk"/build-tools/*/ 2>/dev/null | sed 's:/$::' | sort -rV)
+    [[ -n "$bt" ]] || { echo "sign-release: no runnable apksigner and zipalign (PATH or \$ANDROID_HOME/build-tools)" >&2; exit 2; }
+    zipalign=$bt/zipalign apksigner=$bt/apksigner
+fi
+echo "sign-release: using $apksigner ($("$apksigner" version 2>/dev/null || echo '?'))" >&2
+
+if [[ -n "${APK_SHA256:-}" ]]; then
+    got=$(sha256sum "$in" | cut -d' ' -f1)
+    if [[ "$got" != "$(printf '%s' "$APK_SHA256" | norm)" ]]; then
+        echo "sign-release: REFUSED: $in has sha256 $got, not the published $APK_SHA256" >&2
+        exit 3
+    fi
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+"$zipalign" -p -f 4 "$in" "$work/aligned.apk"
+
+pass=()
+[[ -n "${KS_PASS:-}" ]] && pass=(--ks-pass "$KS_PASS")
+"$apksigner" sign --ks "$ks" --ks-key-alias "$alias" "${pass[@]}" \
+    --v1-signing-enabled false --v2-signing-enabled true --v3-signing-enabled true \
+    --out "$work/signed.apk" "$work/aligned.apk"
+
+# apksigner verify checks only the scheme the platform range would use: at
+# the app's minSdk (30) that is v3, so v2 is checked separately over the API
+# range that reads v2 (24-27). Each must say "true", or the APK is refused.
+report=$("$apksigner" verify --verbose --print-certs "$work/signed.apk")
+v2report=$("$apksigner" verify --verbose --min-sdk-version 24 --max-sdk-version 27 "$work/signed.apk" 2>&1 || true)
+if ! grep -qF "Verified using v3 scheme (APK Signature Scheme v3): true" <<<"$report"; then
+    echo "sign-release: REFUSED: not verified using the v3 scheme" >&2
+    exit 5
+fi
+if ! grep -qF "Verified using v2 scheme (APK Signature Scheme v2): true" <<<"$v2report"; then
+    echo "sign-release: REFUSED: not verified using the v2 scheme" >&2
+    exit 5
+fi
+# apksigner names the signer "Signer #1", "Signer (minSdkVersion=…)" or, in
+# build-tools 37 (apksigner 0.9), "V3.0 Signer:";
+# every signer line must carry
+# the same, expected certificate.
+digests=$(grep -E 'Signer[^:]*: *certificate SHA-256 digest:|^Signer .*certificate SHA-256 digest:' <<<"$report" | sed 's/.*digest: *//' | while read -r d; do printf '%s' "$d" | norm; echo; done | sort -u || true)
+if [[ -z "$digests" ]]; then
+    echo "sign-release: REFUSED: apksigner reported no signer certificate" >&2
+    printf '%s\n' "$report" >&2
+    exit 4
+fi
+got=$digests
+if [[ "$got" != "$want" ]]; then
+    echo "sign-release: REFUSED: the signing certificate is $got, not the recorded $want. Wrong key?" >&2
+    exit 4
+fi
+
+mv "$work/signed.apk" "$out"
+echo "sign-release: signed $out"
+echo "sign-release: certificate SHA-256 $got (matches the recorded fingerprint)"
+echo "sign-release: sha256 $(sha256sum "$out" | cut -d' ' -f1)"

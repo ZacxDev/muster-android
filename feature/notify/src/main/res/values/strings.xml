@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="channel_asks">Asks and approvals</string>
+    <string name="channel_asks_desc">An agent asks you something, a session is waiting, a draft or connector needs you.</string>
+    <string name="channel_tasks">Tasks</string>
+    <string name="channel_tasks_desc">Tasks ready for review, new tasks, comments, agents starting work.</string>
+</resources>
