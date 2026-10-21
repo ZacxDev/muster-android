@@ -67,7 +67,7 @@ class PushRegistrarTest {
         assertEquals(PushStatus.REGISTERED, registrar(store).onNewEndpoint("https://push.example.test/upAbC", "pk", "au"))
         val req = server.takeRequest()
         assertEquals("PUT /api/device/push", "${req.method} ${req.url.encodedPath}")
-        assertEquals("https://push.example.test/upAbC", store.value.pushEndpoint)
+        assertEquals(PushStatus.REGISTERED, store.value.pushStatus)
     }
 
     /** No public key set: the phone could not decrypt, so nothing is registered. */
@@ -92,7 +92,6 @@ class PushRegistrarTest {
         val store = InMemoryDeviceStore(paired(hosts = emptyList()))
         assertEquals(PushRegistrar.ConfigResult.Register("BPk"), registrar(store).refreshConfig())
         assertEquals(listOf("push.example.test"), store.value.pushHosts)
-        assertEquals("BPk", store.value.vapidKey)
     }
 
     @Test

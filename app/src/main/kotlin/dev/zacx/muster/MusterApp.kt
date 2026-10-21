@@ -48,7 +48,6 @@ class MusterApp : Application() {
     /** A notification tap: open the shell at [path], immutable and explicit. */
     private fun tapIntent(tag: String, path: String?): PendingIntent {
         val i = Intent(this, MainActivity::class.java)
-            .setAction(MainActivity.ACTION_OPEN)
             .putExtra(MainActivity.EXTRA_PATH, path)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         // A distinct request code per tag, so two notifications never share an intent.

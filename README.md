@@ -92,7 +92,6 @@ release has been published.
 | `feature/push` | the push handler (decrypted-only), the push-host check, registration |
 | `feature/notify` | channels and drawing notifications |
 | `feature/stepup` | the invisible step-up activity (Phase 2; a stub) |
-| `spikes` | throwaway Phase 0 spike app (`dev.zacx.muster.spikes`) and its scripts |
 
 The rest of the design's layout (`core/data`, `bubble`, `widget`, `live`,
 `update`, `build-logic`) arrives with the phase that needs it.
@@ -153,10 +152,12 @@ There is no Play Store build.
 
 ## Spikes
 
-`spikes/` holds the Phase 0 experiments: the biometric step-up from a
-notification action (S3, S4), lock-screen privacy (S11), WebView safe-area
-insets (S12), and a local ntfy check (S9). `spikes/scripts/` drives them on an
-emulator over adb. See [`docs/phase0-results.md`](docs/phase0-results.md).
+The Phase 0 spike app (the biometric step-up from a notification action, S3
+and S4; lock-screen privacy, S11; WebView insets, S12; a local ntfy check, S9)
+was removed in Phase 1. It is kept at commit
+[`f652f32`](https://github.com/ZacxDev/muster-android/tree/f652f3256bbe487e9babb467e5f509a41ef54068/spikes),
+the one muster's design doc cites. Results are in
+[`docs/phase0-results.md`](docs/phase0-results.md).
 
 ## License
 

@@ -51,9 +51,9 @@ object PushHostCheck {
 /**
  * Keeps the phone's push registration in step with muster:
  *
- * - [refreshConfig] reads `/api/device/config` and records the VAPID key, the
- *   operator push hosts and the feature switches; a 401 there means muster
- *   ended this pairing, and the phone forgets it.
+ * - [refreshConfig] reads `/api/device/config`, records the operator push
+ *   hosts and hands back the VAPID key to register with; a 401 there means
+ *   muster ended this pairing, and the phone forgets it.
  * - [onNewEndpoint] runs the push-host check and then `PUT /api/device/push`,
  *   which muster accepts only after its own test push to the endpoint got a
  *   2xx.
@@ -92,9 +92,7 @@ class PushRegistrar(
                 val served = cfg.push.served && cfg.features.push && cfg.push.vapidPublicKey.isNotEmpty()
                 store.update {
                     it.copy(
-                        vapidKey = cfg.push.vapidPublicKey.ifEmpty { null },
                         pushHosts = cfg.push.hosts,
-                        actionsServed = cfg.features.actions,
                         pushStatus = if (served) it.pushStatus else PushStatus.SERVER_HAS_NO_PUSH,
                         pushNote = if (served) it.pushNote else "This muster server does not send push notifications.",
                     )
@@ -133,7 +131,7 @@ class PushRegistrar(
         set(PushStatus.REGISTERING, null)
         return when (val res = withContext(io) { api(origin).putPush(token, DeviceApi.PushRegistration(endpoint, p256dh, auth)) }) {
             is DeviceApi.Result.Ok -> {
-                store.update { it.copy(pushStatus = PushStatus.REGISTERED, pushNote = null, pushEndpoint = endpoint) }
+                store.update { it.copy(pushStatus = PushStatus.REGISTERED, pushNote = null) }
                 PushStatus.REGISTERED
             }
             DeviceApi.Result.Revoked -> { forget(); PushStatus.NONE }
@@ -147,7 +145,7 @@ class PushRegistrar(
         if (origin != null && token != null) {
             runCatching { withContext(io) { api(origin).deletePush(token) } }
         }
-        store.update { it.copy(pushStatus = PushStatus.UNREGISTERED, pushNote = "The push distributor dropped this phone's registration.", pushEndpoint = null) }
+        store.update { it.copy(pushStatus = PushStatus.UNREGISTERED, pushNote = "The push distributor dropped this phone's registration.") }
     }
 
     suspend fun onRegistrationFailed(reason: String) {

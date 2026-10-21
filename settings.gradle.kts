@@ -29,5 +29,6 @@ include(":feature:stepup")
 include(":feature:push")
 include(":feature:notify")
 
-// Throwaway Phase 0 spike app (applicationId dev.zacx.muster.spikes).
-include(":spikes")
+// The Phase 0 spike app was removed in Phase 1. It is kept at
+// https://github.com/ZacxDev/muster-android/tree/f652f3256bbe487e9babb467e5f509a41ef54068/spikes
+// (the commit muster's design doc cites).

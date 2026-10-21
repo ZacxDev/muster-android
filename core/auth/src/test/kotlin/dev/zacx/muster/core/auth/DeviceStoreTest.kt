@@ -91,7 +91,7 @@ class DeviceStoreTest {
 
     @Test
     fun unpairingKeepsOnlyTheOrigin() {
-        val r = record().copy(pushStatus = PushStatus.REGISTERED, vapidKey = "v", pushHosts = listOf("h"))
+        val r = record().copy(pushStatus = PushStatus.REGISTERED, pushNote = "n", pushHosts = listOf("h"))
         assertEquals(DeviceRecord(origin = "https://m.example.test"), r.unpaired())
     }
 }

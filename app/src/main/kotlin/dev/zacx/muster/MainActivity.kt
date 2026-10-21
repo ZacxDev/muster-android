@@ -309,7 +309,6 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        const val ACTION_OPEN = "dev.zacx.muster.OPEN"
         const val ACTION_SETTINGS = "dev.zacx.muster.SETTINGS"
         const val EXTRA_PATH = "path"
     }

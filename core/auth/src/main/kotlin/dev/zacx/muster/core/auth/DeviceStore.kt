@@ -38,13 +38,14 @@ data class DeviceRecord(
     @SerialName("key_level") val keyLevel: String? = null,
     /** Why the phone is read-only or uses a PIN key, shown in its status. */
     @SerialName("key_note") val keyNote: String? = null,
-    // What /api/device/config said, for the push service (which runs without UI).
-    @SerialName("vapid_key") val vapidKey: String? = null,
+    /**
+     * The operator's push hosts from /api/device/config, kept for the
+     * push-host check, which runs in the push service when the distributor
+     * hands over an endpoint (no UI, no config call there).
+     */
     @SerialName("push_hosts") val pushHosts: List<String> = emptyList(),
-    @SerialName("actions_served") val actionsServed: Boolean = false,
     @SerialName("push_status") val pushStatus: PushStatus = PushStatus.NONE,
     @SerialName("push_note") val pushNote: String? = null,
-    @SerialName("push_endpoint") val pushEndpoint: String? = null,
 ) {
     val paired: Boolean get() = token != null
 

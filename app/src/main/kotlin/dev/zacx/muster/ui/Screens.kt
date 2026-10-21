@@ -30,7 +30,6 @@ import androidx.compose.ui.unit.dp
 import dev.zacx.muster.core.auth.DeviceRecord
 import dev.zacx.muster.core.auth.KeyKind
 import dev.zacx.muster.core.auth.PushStatus
-import dev.zacx.muster.core.model.ActionPolicy
 import kotlinx.coroutines.flow.Flow
 
 /** First run: the muster server URL. The repo carries no deployment's address. */
@@ -94,7 +93,6 @@ fun PhoneSettingsScreen(
     val r by records.collectAsState(initial = DeviceRecord())
     var invalid by remember { mutableStateOf(false) }
     LaunchedEffect(r.keyKind) { invalid = keyInvalidated() }
-    val verdict = ActionPolicy.decide(r.actionsServed, hasStepUpKey = r.keyKind != null, keyValid = !invalid)
     Surface(Modifier.fillMaxSize()) {
         Column(
             Modifier.safeDrawingPadding().padding(24.dp).verticalScroll(rememberScrollState()),
@@ -113,15 +111,9 @@ fun PhoneSettingsScreen(
                     },
                 )
                 r.keyNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                Line(
-                    "Actions",
-                    when (verdict) {
-                        ActionPolicy.Verdict.OFFER_SIGNED -> "each one asks for your biometric"
-                        ActionPolicy.Verdict.SERVER_HAS_NO_ACTIONS -> "not served by this muster yet; every action will ask for your biometric"
-                        ActionPolicy.Verdict.READ_ONLY -> "none: this phone has no step-up key"
-                        ActionPolicy.Verdict.KEY_INVALIDATED -> "none until you re-confirm this phone"
-                    },
-                )
+                if (invalid) {
+                    Text("Re-confirm this phone: its step-up key is gone (a new fingerprint or face was enrolled).", style = MaterialTheme.typography.bodySmall)
+                }
                 Line("Push", r.pushStatus.name.lowercase().replace('_', ' '))
                 r.pushNote?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
