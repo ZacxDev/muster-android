@@ -4,11 +4,13 @@ This is the sideload path for **Phase 1** (the shell, pairing and push), before
 there is a release or an update channel. It installs the release build,
 signed offline with the release key (README, "Signing").
 
-> **What was tested, and what was not.** Every step below was run on an
+> **What was tested, and what was not.** Steps 2–4 and 6–10 were run on an
 > Android emulator (API 36, `google_apis`, headless) against a local muster
 > at the commit the deployment runs, in both password and GoTrue sign-in
-> modes, and a local ntfy 2.31.0 with the ntfy app 1.25.2. Nothing here has
-> run on a real phone yet. The emulator's keystore is software-only, so the
+> modes, and a local ntfy 2.31.0 with the ntfy app 1.25.2, **with a debug-key
+> build**. Step 5's release-key-signed APK was built and verified but has not
+> been installed on any device, and nothing here has run on a real phone
+> yet. The emulator's keystore is software-only, so the
 > emulator always paired **read-only** (step 7). A real phone is expected to
 > make a hardware-backed key; that is expected, not measured.
 
@@ -43,8 +45,9 @@ value of `MUSTER_PUSH_EXTRA_HOSTS`) → **Save**.
 
 🔴 **Do this before pairing.** The push endpoint's host is whatever ntfy's
 default server is when muster registers, and with none set it is `ntfy.sh`,
-which muster refuses. If you change it later, use **Register push again** in
-Phone settings (step 9).
+which muster refuses. If you paired first, **unpair and pair again** (step
+10) after setting it: **Register push again** keeps the endpoint ntfy already
+made, on the old host.
 
 ## 4. Turn off battery optimization for ntfy
 
@@ -82,8 +85,8 @@ Copy `app-release-signed.apk` to the phone and open it, or with USB
 debugging:
 
 ```sh
-adb install app-release-signed.apk
-sha256sum app-release-signed.apk   # check it against the one sign-release printed
+sha256sum app/build/outputs/apk/release/app-release-signed.apk   # check it against the one sign-release printed
+adb install app/build/outputs/apk/release/app-release-signed.apk
 ```
 
 ⚠ **A phone that already has a debug-key build must unpair, uninstall and
@@ -104,8 +107,8 @@ Menu (☰) → **Account** → **Devices** → **Pair this phone** → **Pair**.
 
 - Pairing needs a sign-in from the **last five minutes**. If muster says so,
   tap **Sign out**, sign in again, and tap **Pair this phone** again.
-- The app creates its step-up key and redeems the one-time code. Then it asks
-  to allow notifications: allow them.
+- The app creates its step-up key and redeems the one-time code. Then, on
+  Android 13 and later, it asks to allow notifications: allow them.
 - The "Paired" dialog says what kind of phone this is:
   - "Its actions will ask for your biometric every time": a biometric key on
     secure hardware. This is what a phone with a fingerprint or face should
@@ -115,7 +118,7 @@ Menu (☰) → **Account** → **Devices** → **Pair this phone** → **Pair**.
     hardware-backed, and the phone gets notifications but no actions.
   - Other "read-only" or "biometric or PIN" messages say why.
 
-The Devices list then shows the phone (its name is the phone's model). Push
+The Devices list then shows the phone (its name is the phone's manufacturer and model, e.g. "Google Pixel 8"). Push
 registration finishes a few seconds after pairing; Phone settings (step 8)
 shows when it is registered.
 
@@ -149,7 +152,7 @@ Phone settings says why, and **Register push again** retries.
 
 | Phone settings says | Fix |
 |---|---|
-| "The ntfy app is using ntfy.sh …" (or another host) | Set ntfy's default server (step 3), then **Register push again**. |
+| "The ntfy app is using ntfy.sh …" (or another host) | Set ntfy's default server (step 3), then unpair and pair again (step 10). **Register push again** does not help here: ntfy hands back the endpoint it already made, on the old host. |
 | "Install the ntfy app …" | Install ntfy (step 2). |
 | "This muster server names no push host …" | Set `MUSTER_PUSH_EXTRA_HOSTS` on the server. |
 | "muster refused this phone's push registration: …" | muster's test push to ntfy failed: check that muster reaches your ntfy host on 443. |
