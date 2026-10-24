@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The PWA icon's tile colour (muster web/icon-src/maskable.svg). -->
+    <color name="ic_launcher_background">#110F1C</color>
+</resources>
