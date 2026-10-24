@@ -147,7 +147,12 @@ pinned by commit SHA.
   `*.keystore`, `*.p12`, `*.pk8`, `keystore.properties`, …). Do not force-add
   one.
 - Record the release certificate's SHA-256 fingerprint. Developer
-  verification needs it.
+  verification needs it. The release certificate (alias `muster-release`,
+  RSA 4096) is:
+
+  ```
+  f660222a463633f6e65a87a1701d9ec862364ba4649e8e09d34b8171ad20f5e6
+  ```
 
 ## Distribution
 
