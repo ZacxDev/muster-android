@@ -1,9 +1,8 @@
 # Installing the Phase 1 app on your phone
 
 This is the sideload path for **Phase 1** (the shell, pairing and push), before
-there is a release key, a release or an update channel. It installs a
-**debug-signed** APK: the release build, signed with a development machine's
-debug key instead of the offline release key.
+there is a release or an update channel. It installs the release build,
+signed offline with the release key (README, "Signing").
 
 > **What was tested, and what was not.** Every step below was run on an
 > Android emulator (API 36, `google_apis`, headless) against a local muster
@@ -60,18 +59,36 @@ it", ntfy's server accepted the message, and **nothing reached the phone**,
 until ntfy was opened by hand. With the optimization off, the same flow
 delivered every notification with ntfy in the background.
 
-## 5. Install the muster APK
+## 5. Build, sign and install the muster APK
 
-Copy the APK to the phone and open it, or with USB debugging:
+On the machine that holds the release key (in `nix develop`):
 
 ```sh
-adb install muster-0.1.0-debugsigned.apk
-sha256sum muster-0.1.0-debugsigned.apk   # check it against the one you were given
+./gradlew assembleRelease
+# -> app/build/outputs/apk/release/app-release-unsigned.apk (unsigned)
+KS_PASS=file:/path/to/keystore.pass scripts/sign-release \
+    app/build/outputs/apk/release/app-release-unsigned.apk \
+    /path/to/muster-release.p12 muster-release \
+    f660222a463633f6e65a87a1701d9ec862364ba4649e8e09d34b8171ad20f5e6
+# -> app/build/outputs/apk/release/app-release-signed.apk
+sha256sum app/build/outputs/apk/release/app-release-signed.apk
 ```
 
-⚠ **A debug-signed APK cannot be updated by the release-signed one.** Android
-refuses an update signed with a different key. When the release key exists,
-unpair (step 10), uninstall this APK, and install the release.
+`scripts/sign-release` exits 0 only if the signed APK verifies (v2 and v3)
+and its certificate is the recorded release certificate (README, "Signing").
+It also prints the signed APK's sha256.
+
+Copy `app-release-signed.apk` to the phone and open it, or with USB
+debugging:
+
+```sh
+adb install app-release-signed.apk
+sha256sum app-release-signed.apk   # check it against the one sign-release printed
+```
+
+⚠ **A phone that already has a debug-key build must unpair, uninstall and
+reinstall.** Android refuses an update signed with a different key: unpair
+(step 10), uninstall the old app, then install this APK and pair again.
 
 ## 6. Enter the server URL and sign in
 
@@ -98,8 +115,9 @@ Menu (☰) → **Account** → **Devices** → **Pair this phone** → **Pair**.
     hardware-backed, and the phone gets notifications but no actions.
   - Other "read-only" or "biometric or PIN" messages say why.
 
-The Devices list then shows the phone (its name is the phone's model), with
-"push registered" a few seconds later.
+The Devices list then shows the phone (its name is the phone's model). Push
+registration finishes a few seconds after pairing; Phone settings (step 8)
+shows when it is registered.
 
 ## 8. Check it works
 
