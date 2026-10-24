@@ -55,15 +55,26 @@ class BridgeAndNavigationTest {
         assertEquals(Verdict.REFUSED, ShellNavigation.decide("http://m.example.test/", policy))
     }
 
-    /** 🔴 Until muster sandboxes attachments, the shell loads none of them, in any frame. */
+    /** 🔴 With the gate closed, the shell loads no attachment, in any frame. */
     @Test
-    fun attachmentsAreNotLoaded() {
+    fun attachmentsAreNotLoadedWhileTheGateIsClosed() {
         val a = "https://m.example.test/tasks/42/attachments/7"
-        assertEquals(Verdict.BLOCKED_ATTACHMENT, ShellNavigation.decide(a, policy))
-        assertTrue(ShellNavigation.blocksSubresource(a, policy))
-        assertFalse(ShellNavigation.blocksSubresource("https://m.example.test/static/app.js", policy))
-        assertFalse(ShellNavigation.blocksSubresource("https://cdn.example.test/tasks/1/attachments/2", policy))
-        assertEquals("https://m.example.test/", ShellNavigation.tapTarget("/tasks/42/attachments/7", policy))
+        assertEquals(Verdict.BLOCKED_ATTACHMENT, ShellNavigation.decide(a, policy, sandboxConfirmed = false))
+        assertTrue(ShellNavigation.blocksSubresource(a, policy, sandboxConfirmed = false))
+        assertFalse(ShellNavigation.blocksSubresource("https://m.example.test/static/app.js", policy, sandboxConfirmed = false))
+        assertFalse(ShellNavigation.blocksSubresource("https://cdn.example.test/tasks/1/attachments/2", policy, sandboxConfirmed = false))
+        assertEquals("https://m.example.test/", ShellNavigation.tapTarget("/tasks/42/attachments/7", policy, sandboxConfirmed = false))
+    }
+
+    /** As shipped (the gate open, muster #207): the upload routes load like any muster page. */
+    @Test
+    fun attachmentsLoadAsShipped() {
+        listOf("/tasks/42/attachments/7", "/uploads/abc/file", "/f/abc").forEach { p ->
+            val u = "https://m.example.test$p"
+            assertEquals(u, Verdict.WEBVIEW, ShellNavigation.decide(u, policy))
+            assertFalse(u, ShellNavigation.blocksSubresource(u, policy))
+            assertEquals(u, ShellNavigation.tapTarget(p, policy))
+        }
     }
 
     @Test

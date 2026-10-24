@@ -6,10 +6,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AttachmentGateTest {
-    /** The switch ships OFF: muster's attachment sandbox is not confirmed. */
+    /** The switch ships ON: muster #207 is in the deployed version (see AttachmentGate). */
     @Test
-    fun theGateShipsClosed() {
-        assertEquals(false, AttachmentGate.SANDBOX_CONFIRMED)
+    fun theGateShipsOpen() {
+        assertEquals(true, AttachmentGate.SANDBOX_CONFIRMED)
+        assertFalse(AttachmentGate.blocks("https://m.example.test/tasks/42/attachments/7"))
     }
 
     @Test
@@ -32,7 +33,7 @@ class AttachmentGateTest {
             "https://m.example.test/f/abc.def?x=1",
             "https://m.example.test/x/../f/abc",
             "/f/abc",
-        ).forEach { assertTrue(it, AttachmentGate.blocks(it)) }
+        ).forEach { assertTrue(it, AttachmentGate.blocks(it, sandboxConfirmed = false)) }
     }
 
     @Test
@@ -46,7 +47,7 @@ class AttachmentGateTest {
             "https://m.example.test/f/",
             "https://m.example.test/files/abc",
             "https://m.example.test/tasks/42?next=/tasks/1/attachments/2",
-        ).forEach { assertFalse(it, AttachmentGate.blocks(it)) }
+        ).forEach { assertFalse(it, AttachmentGate.blocks(it, sandboxConfirmed = false)) }
     }
 
     @Test

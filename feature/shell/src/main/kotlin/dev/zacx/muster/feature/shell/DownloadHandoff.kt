@@ -20,11 +20,10 @@ import android.webkit.DownloadListener
  * Only `https` URLs are handed off. `blob:` and `data:` downloads (made by a
  * page's script) and anything else are dropped.
  *
- * 🔴 DORMANT FOR UPLOADS UNTIL AttachmentGate.SANDBOX_CONFIRMED FLIPS. While
- * the gate is closed the WebView never fetches an upload route, so no muster
+ * 🔴 LIVE FOR UPLOADS ONLY WHILE AttachmentGate.SANDBOX_CONFIRMED IS ON. With
+ * the gate closed the WebView never fetches an upload route, so no muster
  * upload reaches this listener (only a download from another page would).
- * It exists so that, once the gate opens, a tap on a non-image file does
- * something instead of nothing.
+ * With it open, a tap on a non-image file lands here.
  */
 class DownloadHandoff(private val handOff: (url: String) -> Unit) : DownloadListener {
 

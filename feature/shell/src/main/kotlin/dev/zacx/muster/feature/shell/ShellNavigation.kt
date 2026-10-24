@@ -16,11 +16,11 @@ import dev.zacx.muster.core.model.AttachmentGate
 object ShellNavigation {
     enum class Verdict { WEBVIEW, CUSTOM_TAB, BLOCKED_ATTACHMENT, REFUSED }
 
-    fun decide(url: String, policy: OriginPolicy): Verdict = when {
+    fun decide(url: String, policy: OriginPolicy, sandboxConfirmed: Boolean = AttachmentGate.SANDBOX_CONFIRMED): Verdict = when {
         // 🔴 Fail closed: what no parser can read goes nowhere.
         policy.unparseable(url) -> Verdict.REFUSED
         policy.allowsInWebView(url) ->
-            if (AttachmentGate.blocks(url)) Verdict.BLOCKED_ATTACHMENT else Verdict.WEBVIEW
+            if (AttachmentGate.blocks(url, sandboxConfirmed)) Verdict.BLOCKED_ATTACHMENT else Verdict.WEBVIEW
         url.startsWith("https://", ignoreCase = true) -> Verdict.CUSTOM_TAB
         else -> Verdict.REFUSED
     }
@@ -31,14 +31,14 @@ object ShellNavigation {
      * subresources are the page's own business, under muster's CSP. A URL no
      * parser can read is refused whatever its origin (fail closed).
      */
-    fun blocksSubresource(url: String, policy: OriginPolicy): Boolean =
-        policy.unparseable(url) || (policy.allowsInWebView(url) && AttachmentGate.blocks(url))
+    fun blocksSubresource(url: String, policy: OriginPolicy, sandboxConfirmed: Boolean = AttachmentGate.SANDBOX_CONFIRMED): Boolean =
+        policy.unparseable(url) || (policy.allowsInWebView(url) && AttachmentGate.blocks(url, sandboxConfirmed))
 
     /** The URL a notification tap opens, or null to open the server's home page. */
-    fun tapTarget(path: String?, policy: OriginPolicy): String {
+    fun tapTarget(path: String?, policy: OriginPolicy, sandboxConfirmed: Boolean = AttachmentGate.SANDBOX_CONFIRMED): String {
         val home = policy.allowedOriginRule + "/"
         if (path == null) return home
         val url = policy.allowedOriginRule + path
-        return if (decide(url, policy) == Verdict.WEBVIEW) url else home
+        return if (decide(url, policy, sandboxConfirmed) == Verdict.WEBVIEW) url else home
     }
 }
