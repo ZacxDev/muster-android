@@ -38,9 +38,6 @@ import dev.zacx.muster.ui.PhoneSettingsScreen
 import dev.zacx.muster.ui.ServerUrlScreen
 import dev.zacx.muster.ui.StatusBanner
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -54,9 +51,6 @@ class MainActivity : ComponentActivity() {
     private val app get() = MusterApp.from(this)
     private var webView: WebView? = null
     private var policy: OriginPolicy? = null
-
-    /** Reloads Account when push registration settles (AccountPageRefresh); one per shell. */
-    private var pushWatch: Job? = null
 
     /** The ONE back callback, registered once in onCreate (ShellBack). */
     private val back = ShellBack { webView }
@@ -152,19 +146,7 @@ class MainActivity : ComponentActivity() {
         webView = wv
         back.sync()
         wv.loadUrl(target)
-        watchPush(wv, p)
         if (record.paired) refreshPush(registerIfNeeded = record.pushStatus != PushStatus.REGISTERED)
-    }
-
-    private fun watchPush(wv: WebView, p: OriginPolicy) {
-        pushWatch?.cancel()
-        pushWatch = lifecycleScope.launch {
-            var previous: PushStatus? = null
-            app.store.records.map { it.pushStatus }.distinctUntilChanged().collect { status ->
-                if (webView === wv && AccountPageRefresh.shouldReload(previous, status, wv.url, p)) wv.reload()
-                previous = status
-            }
-        }
     }
 
     private fun shellCallbacks(p: OriginPolicy) = object : ShellWebView.Callbacks {
@@ -375,8 +357,6 @@ class MainActivity : ComponentActivity() {
 
     /** Detaches and DESTROYS the shell's WebView (its renderer, its page), and re-syncs back. */
     private fun dropWebView() {
-        pushWatch?.cancel()
-        pushWatch = null
         webView?.let { v ->
             (v.parent as? ViewGroup)?.removeView(v)
             v.destroy()
