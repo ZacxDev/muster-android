@@ -37,9 +37,9 @@ class FailClosedTest {
     @Test
     fun uploadUrlsChromiumAcceptsAreBlockedEverywhere() {
         lenientUploads.forEach { u ->
-            assertTrue("gate: $u", AttachmentGate.blocks(u))
-            assertTrue("subresource: $u", ShellNavigation.blocksSubresource(u, policy))
-            assertEquals("navigation: $u", Verdict.BLOCKED_ATTACHMENT, ShellNavigation.decide(u, policy))
+            assertTrue("gate: $u", AttachmentGate.blocks(u, sandboxConfirmed = false))
+            assertTrue("subresource: $u", ShellNavigation.blocksSubresource(u, policy, sandboxConfirmed = false))
+            assertEquals("navigation: $u", Verdict.BLOCKED_ATTACHMENT, ShellNavigation.decide(u, policy, sandboxConfirmed = false))
         }
     }
 
@@ -47,9 +47,18 @@ class FailClosedTest {
     @Test
     fun anUnparseableUrlIsBlocked() {
         listOf("$o/tasks/1/attachments/%zz", "$o/%zz", "https://m.example.test:99999999/x").forEach { u ->
-            assertTrue("gate: $u", AttachmentGate.blocks(u))
+            assertTrue("gate: $u", AttachmentGate.blocks(u, sandboxConfirmed = false))
+            assertTrue("subresource: $u", ShellNavigation.blocksSubresource(u, policy, sandboxConfirmed = false))
+            assertTrue("never the WebView or a browser: $u", ShellNavigation.decide(u, policy, sandboxConfirmed = false) in setOf(Verdict.REFUSED, Verdict.BLOCKED_ATTACHMENT))
+        }
+    }
+
+    /** 🔴 Opening the gate does not open what no parser can read: the shell refuses it either way. */
+    @Test
+    fun anUnparseableUrlIsRefusedWithTheGateOpen() {
+        listOf("$o/tasks/1/attachments/%zz", "$o/%zz", "https://m.example.test:99999999/x").forEach { u ->
             assertTrue("subresource: $u", ShellNavigation.blocksSubresource(u, policy))
-            assertTrue("never the WebView or a browser: $u", ShellNavigation.decide(u, policy) in setOf(Verdict.REFUSED, Verdict.BLOCKED_ATTACHMENT))
+            assertEquals("navigation: $u", Verdict.REFUSED, ShellNavigation.decide(u, policy))
         }
     }
 

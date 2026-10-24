@@ -49,11 +49,19 @@ class PushHandlerTest {
         assertTrue(sink.shown.isEmpty())
     }
 
-    /** A notification never opens a note attachment (AttachmentGate): the tap target is dropped. */
+    /** With the gate closed a notification never opens an attachment: the tap target is dropped. */
     @Test
-    fun anAttachmentTapTargetIsDropped() {
+    fun anAttachmentTapTargetIsDroppedWhileTheGateIsClosed() {
+        val p = """{"v":2,"type":"comment","tag":"c","title":"x","url":"/tasks/4/attachments/2"}""".encodeToByteArray()
+        assertEquals(Outcome.SHOWN, PushHandler(sink, sandboxConfirmed = false).handle(p, true, true))
+        assertEquals(null, sink.shown.single().path)
+    }
+
+    /** As shipped (the gate open): an attachment tap target is kept. */
+    @Test
+    fun anAttachmentTapTargetIsKeptAsShipped() {
         val p = """{"v":2,"type":"comment","tag":"c","title":"x","url":"/tasks/4/attachments/2"}""".encodeToByteArray()
         assertEquals(Outcome.SHOWN, handler.handle(p, true, true))
-        assertEquals(null, sink.shown.single().path)
+        assertEquals("/tasks/4/attachments/2", sink.shown.single().path)
     }
 }

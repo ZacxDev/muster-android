@@ -58,14 +58,15 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
 - **Phone settings** (long-press the launcher icon): pairing, step-up key,
   push state, unpair.
 
-### 🔴 Uploaded files are not rendered
+### 🔴 Uploaded files
 
 muster serves uploaded bytes on its own origin, which is where the bridge
-answers. Until muster's sandbox for them (muster #207) is confirmed deployed,
-the shell refuses every route that serves them, `/tasks/{id}/attachments/…`,
-`/uploads/{id}/file` and `/f/{id}`, as a page and as a subresource (so upload
-thumbnails do not render either), and a notification never opens one
-(`AttachmentGate.SANDBOX_CONFIRMED`, a compile-time switch, off).
+answers. muster #207 serves them sandboxed (`Content-Security-Policy: …
+sandbox`, `nosniff`, and every non-image as a download), so the shell loads
+`/tasks/{id}/attachments/…`, `/uploads/{id}/file` and `/f/{id}`
+(`AttachmentGate.SANDBOX_CONFIRMED`, a compile-time switch, **on**). 🔴 That
+holds only for a muster at #207 or later; with the switch off, the shell
+refuses those routes everywhere, thumbnails included.
 
 A download (a response served as `Content-Disposition: attachment`) is handed
 to the browser in a Custom Tab with its URL only: no cookie, no credential.
