@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive icon foreground: the marks of muster's PWA icon
+     (muster web/icon-src/maskable.svg, viewBox 192), drawn in that viewBox
+     and scaled by 0.48 about its centre onto the 108dp layer. The farthest
+     mark is ~65.3 units from the centre, so ~31.3dp: inside the 33dp radius
+     of the 66dp safe zone that no launcher mask clips. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.48"
+        android:scaleY="0.48"
+        android:translateX="7.92"
+        android:translateY="7.92">
+        <!-- Done: brass disc, dark check, bright bar. -->
+        <path
+            android:fillColor="#E4B556"
+            android:pathData="M45,64a13,13 0 1,0 26,0a13,13 0 1,0 -26,0Z" />
+        <path
+            android:pathData="M51.5,64.5l4.5,4.5l8.5,-9"
+            android:strokeColor="#1E1606"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:strokeWidth="4.5" />
+        <path
+            android:fillColor="#EEEBF7"
+            android:pathData="M90,58h46a6,6 0 0,1 0,12h-46a6,6 0 0,1 0,-12Z" />
+        <!-- Done. -->
+        <path
+            android:fillColor="#E4B556"
+            android:pathData="M45,98a13,13 0 1,0 26,0a13,13 0 1,0 -26,0Z" />
+        <path
+            android:pathData="M51.5,98.5l4.5,4.5l8.5,-9"
+            android:strokeColor="#1E1606"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:strokeWidth="4.5" />
+        <path
+            android:fillColor="#C3BDD9"
+            android:pathData="M90,92h34a6,6 0 0,1 0,12h-34a6,6 0 0,1 0,-12Z" />
+        <!-- Open: an outlined ring and a dimmer bar. -->
+        <path
+            android:pathData="M47,132a11,11 0 1,0 22,0a11,11 0 1,0 -22,0Z"
+            android:strokeColor="#6E6790"
+            android:strokeWidth="4" />
+        <path
+            android:fillColor="#9A93B5"
+            android:pathData="M90,126h24a6,6 0 0,1 0,12h-24a6,6 0 0,1 0,-12Z" />
+    </group>
+</vector>
