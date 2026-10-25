@@ -31,6 +31,7 @@ class BackgroundRefreshTest {
         val refresh = BackgroundRefresh(
             refreshConfig = { log += "config"; result() },
             onRevoked = { log += "revoked" },
+            onNotPaired = { log += "stop" },
             prewarm = { log += "prewarm" },
         )
     }
@@ -50,10 +51,16 @@ class BackgroundRefreshTest {
 
     @Test
     fun onlyARevocationUnregistersPush() {
-        assertEquals(BackgroundRefresh.Outcome.REVOKED to listOf("config", "revoked", "prewarm"), outcome { ConfigResult.Revoked })
-        // A failure is not a revocation (only muster's own refusal is): the pairing stays.
+        // Revoked: push unregistered, the job stops, and no Chromium for a phone that is no longer paired.
+        assertEquals(BackgroundRefresh.Outcome.REVOKED to listOf("config", "revoked", "stop"), outcome { ConfigResult.Revoked })
+        // A failure is not a revocation (only muster's own refusal is): the pairing stays, and so does the job.
         assertEquals(BackgroundRefresh.Outcome.CONFIG_FAILED to listOf("config", "prewarm"), outcome { ConfigResult.Failed("timeout") })
-        assertEquals(BackgroundRefresh.Outcome.NOT_PAIRED to listOf("config", "prewarm"), outcome { ConfigResult.NotPaired })
+    }
+
+    /** An unpaired phone has nothing for the job to read: it stops itself and warms nothing. */
+    @Test
+    fun anUnpairedPhoneStopsTheJobAndWarmsNothing() {
+        assertEquals(BackgroundRefresh.Outcome.NOT_PAIRED to listOf("config", "stop"), outcome { ConfigResult.NotPaired })
     }
 
     @Test
@@ -107,8 +114,13 @@ class RefreshScheduleTest {
         assertEquals(first.id, again.id) // KEEP: not replaced, so its period is not restarted
     }
 
+    /**
+     * cancel() ends the schedule. Only the primitive: which paths call it
+     * (change server, unpair, revocation, an unpaired run) is
+     * ShellLocalStateTest's, through the calls those paths make.
+     */
     @Test
-    fun changingServerCancelsIt() {
+    fun cancelEndsTheSchedule() {
         RefreshSchedule.ensure(wm)
         RefreshSchedule.cancel(wm)
         assertEquals(WorkInfo.State.CANCELLED, infos().single().state)

@@ -13,12 +13,10 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
 import android.view.PixelCopy
-import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebView
 import android.widget.FrameLayout
-import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -33,7 +31,6 @@ import androidx.core.graphics.createBitmap
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import androidx.work.WorkManager
 import dev.zacx.muster.core.auth.DeviceRecord
 import dev.zacx.muster.core.auth.Pairing
 import dev.zacx.muster.core.auth.PushStatus
@@ -46,9 +43,9 @@ import dev.zacx.muster.feature.shell.ShellBack
 import dev.zacx.muster.feature.shell.ShellNavigation
 import dev.zacx.muster.feature.shell.ShellWebView
 import dev.zacx.muster.push.MusterPushService
-import dev.zacx.muster.refresh.RefreshSchedule
-import dev.zacx.muster.refresh.scheduleBackgroundRefresh
+import dev.zacx.muster.shell.ShellCookies
 import dev.zacx.muster.shell.ShellSnapshot
+import dev.zacx.muster.shell.SnapshotOverlay
 import dev.zacx.muster.shell.SnapshotPolicy
 import dev.zacx.muster.ui.PhoneSettingsScreen
 import dev.zacx.muster.ui.ServerUrlScreen
@@ -70,9 +67,12 @@ class MainActivity : ComponentActivity() {
     private var policy: OriginPolicy? = null
     private var reportedDrawn = false
 
-    /** The last home-page frame (ShellSnapshot), on screen until the live page paints. */
-    private val snapshot by lazy { ShellSnapshot(noBackupFilesDir) }
-    private var overlay: View? = null
+    /** The last home-page frame (ShellSnapshot) and the background job, and when they go. */
+    private val local get() = app.local
+    private val snapshot get() = local.snapshot
+
+    /** The last frame on screen until the live page paints (or it times out). */
+    private var overlay: SnapshotOverlay? = null
 
     /** The shell's current load was the launcher's home page: its first commit decides the snapshot's fate. */
     private var homeLoadPending = false
@@ -176,8 +176,11 @@ class MainActivity : ComponentActivity() {
         }
         val page = FrameLayout(this)
         homeLoadPending = path == null
-        overlay = if (picture != null && path == null) snapshotOverlay(picture).also {
-            page.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        overlay = if (picture != null && path == null) {
+            SnapshotOverlay(this, picture, SHELL_BACKGROUND, onGone = { o ->
+                if (overlay === o) overlay = null
+                StartupProbe.mark("shell.placeholder.gone")
+            }).also { it.show(page) }
         } else null
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -278,7 +281,7 @@ class MainActivity : ComponentActivity() {
 
         override fun onPageEvent(view: WebView, event: ShellWebView.PageEvent, url: String) {
             StartupProbe.page(view, event, url)
-            if (event != ShellWebView.PageEvent.STARTED && view === webView) onFirstPaint(view, url)
+            if (view === webView) onPageMilestone(view, event, url)
             // The first muster page on screen is "fully drawn" for the system's
             // startup metrics (logcat "Fully drawn", am start -W); once per activity.
             if (event == ShellWebView.PageEvent.COMMIT_VISIBLE && !reportedDrawn) {
@@ -300,38 +303,33 @@ class MainActivity : ComponentActivity() {
 
     // --- the snapshot (ShellSnapshot) --------------------------------------------------
 
-    /** The last frame, drawn 1:1 from the top left (same width: SnapshotPolicy.showable), swallowing touches. */
-    private fun snapshotOverlay(picture: Bitmap) = ImageView(this).apply {
-        setImageBitmap(picture)
-        scaleType = ImageView.ScaleType.MATRIX
-        setBackgroundColor(SHELL_BACKGROUND)
-        isClickable = true // a tap must not reach the live page under a stale picture
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-    }
-
-    /** A page of the shell committed ([url]): settle the snapshot, then take the picture away once the page has painted. */
-    private fun onFirstPaint(view: WebView, url: String) {
+    /**
+     * A main-frame milestone of the shell's page: settle the snapshot on a
+     * commit or finish, then take the picture away. A commit takes it away
+     * once the page has painted (no blank frame between picture and page);
+     * a finish or a main-frame error takes it away at once, as a page that
+     * never paints must not leave the picture up (SnapshotOverlay also times
+     * out by itself).
+     */
+    private fun onPageMilestone(view: WebView, event: ShellWebView.PageEvent, url: String) {
         val p = policy ?: return
-        // Signed out (or the session expired): the stored board is no longer this user's to see.
-        if (SnapshotPolicy.isSignIn(url, p.allowedOriginRule)) lifecycleScope.launch(snapshotIo) { snapshot.delete() }
-        if (homeLoadPending) {
+        if (event == ShellWebView.PageEvent.STARTED) return
+        if (event != ShellWebView.PageEvent.ERROR) {
+            val home = homeLoadPending
             homeLoadPending = false
-            // The home page landed elsewhere (signed out: the sign-in page): its picture is wrong now.
-            if (!SnapshotPolicy.isHome(url, p.allowedOriginRule)) lifecycleScope.launch(snapshotIo) { snapshot.delete() }
-        }
-        if (!refreshScheduled) {
-            // Off the start-up path: after the first commit, on a background thread.
-            refreshScheduled = true
-            app.scope.launch { scheduleBackgroundRefresh(applicationContext) }
+            lifecycleScope.launch { local.onCommit(url, p.allowedOriginRule, home) }
+            if (!refreshScheduled) {
+                // Off the start-up path: after the first commit, on a background thread; paired phones only.
+                refreshScheduled = true
+                app.scope.launch { local.syncRefresh(app.store.read().paired) }
+            }
         }
         val o = overlay ?: return
-        overlay = null
-        val drop = { (o.parent as? ViewGroup)?.removeView(o); StartupProbe.mark("shell.placeholder.gone") }
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.VISUAL_STATE_CALLBACK)) {
-            // Fires once the frame holding this commit is on screen: no blank frame between picture and page.
-            WebViewCompat.postVisualStateCallback(view, 0L) { runOnUiThread { drop() } }
+        if (event == ShellWebView.PageEvent.COMMIT_VISIBLE && WebViewFeature.isFeatureSupported(WebViewFeature.VISUAL_STATE_CALLBACK)) {
+            // Fires once the frame holding this commit is on screen.
+            WebViewCompat.postVisualStateCallback(view, 0L) { runOnUiThread { o.dismiss() } }
         } else {
-            drop()
+            o.dismiss()
         }
     }
 
@@ -339,14 +337,14 @@ class MainActivity : ComponentActivity() {
     private fun captureSnapshot() {
         val wv = webView ?: return
         val p = policy ?: return
-        if (overlay != null || wv.width == 0 || wv.height == 0) return // the live page has not painted yet
+        if (overlay?.isShowing == true || wv.width == 0 || wv.height == 0) return // the live page has not painted yet
         if (!SnapshotPolicy.isHome(wv.url, p.allowedOriginRule)) return
         val meta = snapshotMeta(p.allowedOriginRule)
         val loc = IntArray(2).also(wv::getLocationInWindow)
         val bmp = runCatching { createBitmap(wv.width, wv.height) }.getOrNull() ?: return
         val done = PixelCopy.OnPixelCopyFinishedListener { r ->
             if (r != PixelCopy.SUCCESS) { bmp.recycle(); return@OnPixelCopyFinishedListener }
-            app.scope.launch(snapshotIo) {
+            app.scope.launch(local.io) {
                 runCatching { snapshot.save(bmp, meta) }
                 bmp.recycle()
             }
@@ -364,7 +362,8 @@ class MainActivity : ComponentActivity() {
         // signed out again after a sign-in, or signed in again after a
         // sign-out (both seen on the emulator, a few seconds after signing).
         // Native code still never reads them.
-        CookieManager.getInstance().flush()
+        // Only with a WebView, and never a crash (ShellCookies).
+        ShellCookies.flushOnPause(webView)
         super.onPause()
     }
 
@@ -397,6 +396,7 @@ class MainActivity : ComponentActivity() {
                 .setPositiveButton(android.R.string.ok, null).show()
             if (out is Pairing.Outcome.Paired) {
                 askNotificationPermission()
+                app.scope.launch { local.syncRefresh(paired = true) }
                 refreshPush(registerIfNeeded = true)
                 webView?.reload()
             }
@@ -481,7 +481,8 @@ class MainActivity : ComponentActivity() {
             }
             runCatching { MusterPushService.unregister(this@MainActivity) }
             r.keyAlias?.let { a -> withContext(Dispatchers.IO) { runCatching { app.keys.delete(a) } } }
-            app.store.update(DeviceRecord::unpaired)
+            // The record loses its pairing; the picture and the background job go with it.
+            local.markUnpaired(app.store)
             Toast.makeText(this@MainActivity, R.string.unpaired, Toast.LENGTH_LONG).show()
         }
     }
@@ -489,11 +490,7 @@ class MainActivity : ComponentActivity() {
     /** Only while unpaired: forget the server and its cookies, back to the first-run screen. */
     private fun changeServer() {
         lifecycleScope.launch {
-            if (app.store.read().paired) return@launch
-            CookieManager.getInstance().removeAllCookies(null)
-            withContext(snapshotIo) { snapshot.delete() }
-            runCatching { RefreshSchedule.cancel(WorkManager.getInstance(applicationContext)) }
-            app.store.update { DeviceRecord() }
+            if (!local.changeServer(app.store) { CookieManager.getInstance().removeAllCookies(null) }) return@launch
             startActivity(Intent(this@MainActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK))
         }
     }
@@ -515,6 +512,7 @@ class MainActivity : ComponentActivity() {
     /** Detaches and DESTROYS the shell's WebView (its renderer, its page), and re-syncs back. */
     private fun dropWebView() {
         shellGeneration++
+        overlay?.dismiss()
         overlay = null
         homeLoadPending = false
         webView?.let { v ->
@@ -532,9 +530,5 @@ class MainActivity : ComponentActivity() {
 
         /** muster's dark theme-color (web: `<meta name="theme-color">`), the launcher icon's tile too. */
         const val SHELL_BACKGROUND = 0xFF110F1C.toInt()
-
-        /** One writer at a time for the snapshot's two files. */
-        @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-        private val snapshotIo = Dispatchers.IO.limitedParallelism(1)
     }
 }

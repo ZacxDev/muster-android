@@ -56,6 +56,20 @@ class SnapshotPolicyTest {
     }
 
     @Test
+    fun aCommitDeletesThePictureOnSignInOrWhenTheHomeLoadLandsElsewhere() {
+        // Any page reaching sign-in, home load or not.
+        assertTrue(SnapshotPolicy.dropsOnCommit("$o/login", o, homeLoad = false))
+        assertTrue(SnapshotPolicy.dropsOnCommit("$o/login", o, homeLoad = true))
+        // The home load landing anywhere but home.
+        assertTrue(SnapshotPolicy.dropsOnCommit("$o/tasks", o, homeLoad = true))
+        assertTrue(SnapshotPolicy.dropsOnCommit("https://other.example.test/", o, homeLoad = true))
+        // Kept: the home load landing home, and any later page that is not sign-in.
+        assertFalse(SnapshotPolicy.dropsOnCommit("$o/", o, homeLoad = true))
+        assertFalse(SnapshotPolicy.dropsOnCommit("$o/tasks", o, homeLoad = false))
+        assertFalse(SnapshotPolicy.dropsOnCommit("$o/", o, homeLoad = false))
+    }
+
+    @Test
     fun metaRoundTripsAndAnythingElseReadsAsNone() {
         val m = ShellSnapshot.Meta(o, 2, 731)
         assertEquals(m, SnapshotPolicy.decode(SnapshotPolicy.encode(m)))
@@ -70,6 +84,11 @@ class SnapshotPolicyTest {
 class ShellSnapshotTest {
     private val dir = File(ApplicationProvider.getApplicationContext<Application>().noBackupFilesDir, "t")
     private val m = ShellSnapshot.Meta("https://m.example.test", 1, 411)
+
+    private val HOUR = 60L * 60 * 1000
+
+    @org.junit.Before
+    fun clean() { dir.deleteRecursively() }
 
     private fun bitmap() = Bitmap.createBitmap(40, 80, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.rgb(17, 15, 28)) }
 
@@ -86,6 +105,40 @@ class ShellSnapshotTest {
         s.delete()
         assertNull(s.read())
         assertFalse(File(dir, "shell-snapshot.jpg").exists())
+    }
+
+    /** A picture older than a day is deleted unshown; a younger one is shown. */
+    @Test
+    fun aStalePictureIsDeletedWhenRead() {
+        ShellSnapshot(dir).save(bitmap(), m)
+        val taken = File(dir, "shell-snapshot.jpg").lastModified()
+        // 23 h on: still shown.
+        assertNotNull(ShellSnapshot(dir) { taken + 23 * HOUR }.read())
+        // 25 h on: deleted, both files.
+        assertNull(ShellSnapshot(dir) { taken + 25 * HOUR }.read())
+        assertFalse(File(dir, "shell-snapshot.jpg").exists())
+        assertFalse(File(dir, "shell-snapshot.meta").exists())
+    }
+
+    /** The clock moved back past the picture: its age is unknown, so it goes. */
+    @Test
+    fun aPictureFromTheFutureIsDeleted() {
+        ShellSnapshot(dir).save(bitmap(), m)
+        val taken = File(dir, "shell-snapshot.jpg").lastModified()
+        assertNull(ShellSnapshot(dir) { taken - 3 * HOUR }.read())
+        assertFalse(File(dir, "shell-snapshot.jpg").exists())
+    }
+
+    @Test
+    fun pruneIfStaleKeepsAFreshPictureAndReportsNoneLeft() {
+        val s0 = ShellSnapshot(dir)
+        s0.save(bitmap(), m)
+        val taken = File(dir, "shell-snapshot.jpg").lastModified()
+        assertFalse(ShellSnapshot(dir) { taken + 2 * HOUR }.pruneIfStale())
+        assertTrue(File(dir, "shell-snapshot.jpg").exists())
+        assertTrue(ShellSnapshot(dir) { taken + 30 * HOUR }.pruneIfStale())
+        assertFalse(File(dir, "shell-snapshot.jpg").exists())
+        assertTrue("nothing there: none left", s0.pruneIfStale())
     }
 
     /** The meta is written last: an image without one is no snapshot. */

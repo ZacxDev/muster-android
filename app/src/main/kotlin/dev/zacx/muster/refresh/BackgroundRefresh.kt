@@ -13,9 +13,8 @@ import dev.zacx.muster.MusterApp
 import dev.zacx.muster.feature.push.PushRegistrar
 import dev.zacx.muster.feature.shell.WebViewPrewarm
 import dev.zacx.muster.push.MusterPushService
+import dev.zacx.muster.shell.ShellLocalState
 import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.TimeUnit
 
@@ -37,12 +36,19 @@ import java.util.concurrent.TimeUnit
  *    warm start, not a cold one. Android decides how long a cached process
  *    lives; nothing here keeps it alive.
  *
+ * Both only while the phone is paired. Unpaired (or muster ended the
+ * pairing on this run), there is nothing to read: the job cancels itself
+ * ([onNotPaired]; on a revocation the registrar's forget has already
+ * deleted the picture and cancelled it, [ShellLocalState.forget]) and starts
+ * no Chromium.
+ *
  * The page itself is refreshed in place when the app opens: the last frame
  * (ShellSnapshot) shows at once and the live page replaces it.
  */
 class BackgroundRefresh(
     private val refreshConfig: suspend () -> PushRegistrar.ConfigResult,
-    private val onRevoked: () -> Unit,
+    private val onRevoked: suspend () -> Unit,
+    private val onNotPaired: suspend () -> Unit,
     private val prewarm: suspend () -> Unit,
 ) {
     enum class Outcome { CONFIG_READ, NOT_PAIRED, REVOKED, CONFIG_FAILED }
@@ -51,10 +57,15 @@ class BackgroundRefresh(
         val outcome = when (runCatching { refreshConfig() }.getOrNull()) {
             is PushRegistrar.ConfigResult.Register, PushRegistrar.ConfigResult.NoPush -> Outcome.CONFIG_READ
             PushRegistrar.ConfigResult.NotPaired -> Outcome.NOT_PAIRED
-            PushRegistrar.ConfigResult.Revoked -> Outcome.REVOKED.also { onRevoked() }
+            PushRegistrar.ConfigResult.Revoked -> Outcome.REVOKED
             is PushRegistrar.ConfigResult.Failed, null -> Outcome.CONFIG_FAILED
         }
-        prewarm()
+        when (outcome) {
+            // Still paired (a failure is not a revocation): warm Chromium for the next open.
+            Outcome.CONFIG_READ, Outcome.CONFIG_FAILED -> prewarm()
+            Outcome.REVOKED -> { onRevoked(); onNotPaired() }
+            Outcome.NOT_PAIRED -> onNotPaired()
+        }
         return outcome
     }
 }
@@ -89,9 +100,11 @@ object RefreshSchedule {
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val app = MusterApp.from(applicationContext)
+        app.local.pruneStale()
         val outcome = BackgroundRefresh(
             refreshConfig = { app.registrar.refreshConfig() },
             onRevoked = { runCatching { MusterPushService.unregister(applicationContext) } },
+            onNotPaired = { app.local.cancelRefresh() },
             prewarm = { prewarmAndWait(applicationContext) },
         ).run()
         android.util.Log.i("muster", "background refresh: $outcome")
@@ -111,9 +124,4 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             withTimeoutOrNull(10_000) { warm.await() }
         }
     }
-}
-
-/** Schedules the job off the main thread (WorkManager initialises on first use). */
-suspend fun scheduleBackgroundRefresh(context: Context) = withContext(Dispatchers.Default) {
-    runCatching { RefreshSchedule.ensure(WorkManager.getInstance(context)) }
 }

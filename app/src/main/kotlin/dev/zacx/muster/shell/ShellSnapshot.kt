@@ -23,13 +23,26 @@ import java.io.File
  *   picture.
  * - **Dropped when it would be wrong:** any page of the shell landing on
  *   muster's sign-in page (sign-out, an expired session) and the home load
- *   landing anywhere but `/` delete it; "change server" deletes it; a
+ *   landing anywhere but `/` delete it; "change server", unpairing and
+ *   muster ending the pairing delete it ([ShellLocalState.forget]); a
  *   different server or screen shape is never shown.
- * - **Stored like the WebView's own cache:** app-private, in
- *   `noBackupFilesDir`, so never in a backup. Native code never reads the
- *   page or its cookies; this is pixels the user already saw.
+ * - **Dropped when it is old** ([MAX_AGE_MS], 24 h): a picture is only worth
+ *   showing while it is close to what the live page will draw. muster's
+ *   board changes within hours, so a day-old picture misleads more than it
+ *   helps, and a phone left unopened does not keep a copy of the board for
+ *   longer than that. Daily use loses nothing: every time the app leaves the
+ *   home page, it takes a new picture. The age is checked when the picture is
+ *   read (the next open) and by the background job ([pruneIfStale]); a phone
+ *   that is neither opened nor paired keeps it until its next open, which
+ *   then deletes it unshown.
+ * - **A new copy of board text at rest.** The JPEG holds what the board
+ *   showed (task titles, agent names), outside the WebView's own storage, in
+ *   a file of the app's own. It is app-private, in `noBackupFilesDir`, so
+ *   never in a backup, and it is only ever drawn inside the app's own
+ *   activity, never on the lock screen. Native code still never reads the
+ *   page or its cookies; the picture is pixels the user already saw.
  */
-class ShellSnapshot(private val dir: File) {
+class ShellSnapshot(private val dir: File, private val now: () -> Long = System::currentTimeMillis) {
     data class Meta(val origin: String, val orientation: Int, val widthDp: Int)
 
     private val image get() = File(dir, "shell-snapshot.jpg")
@@ -54,6 +67,7 @@ class ShellSnapshot(private val dir: File) {
      * known once the device record is read, which happens at the same time.
      */
     fun read(hardware: Boolean = false): Stored? {
+        if (pruneIfStale()) return null
         val m = runCatching { SnapshotPolicy.decode(meta.readText()) }.getOrNull() ?: return null
         // A HARDWARE bitmap is uploaded to the GPU here, on the caller's
         // (background) thread, not by the render thread on the first frame
@@ -70,9 +84,25 @@ class ShellSnapshot(private val dir: File) {
         image.delete()
     }
 
+    /**
+     * Deletes the snapshot when it is older than [MAX_AGE_MS], or dated in
+     * the future (the clock moved back: its age is unknown). True when there
+     * is no snapshot left to show. Call off the main thread.
+     */
+    fun pruneIfStale(): Boolean {
+        if (!image.exists() && !meta.exists()) return true
+        val age = now() - image.lastModified()
+        if (age in 0..MAX_AGE_MS) return false
+        delete()
+        return true
+    }
+
     companion object {
         /** Text at this quality reads cleanly for the second or so it is shown. */
         const val QUALITY = 80
+
+        /** The oldest picture still shown: a day (see the class comment for why). */
+        const val MAX_AGE_MS = 24L * 60 * 60 * 1000
     }
 }
 
@@ -101,6 +131,15 @@ object SnapshotPolicy {
     }
 
     const val SIGN_IN_PATH = "/login"
+
+    /**
+     * A commit at [url] deletes the snapshot: any page reaching sign-in
+     * (signed out, the session expired: the stored board is no longer this
+     * user's to see), or the home load ([homeLoad]) landing anywhere but the
+     * home page (its picture is wrong now).
+     */
+    fun dropsOnCommit(url: String?, origin: String, homeLoad: Boolean): Boolean =
+        isSignIn(url, origin) || (homeLoad && !isHome(url, origin))
 
     /** The stored snapshot may be shown for [want]: same server, same screen shape. */
     fun showable(stored: ShellSnapshot.Meta, want: ShellSnapshot.Meta): Boolean = stored == want
