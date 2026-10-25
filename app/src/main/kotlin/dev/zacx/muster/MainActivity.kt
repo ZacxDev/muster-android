@@ -38,6 +38,7 @@ import dev.zacx.muster.core.model.MusterPath
 import dev.zacx.muster.core.net.DeviceApi
 import dev.zacx.muster.feature.push.PushRegistrar
 import dev.zacx.muster.feature.shell.BridgeMessage
+import dev.zacx.muster.feature.shell.MicrophoneAccess
 import dev.zacx.muster.feature.shell.OriginPolicy
 import dev.zacx.muster.feature.shell.ShellBack
 import dev.zacx.muster.feature.shell.ShellNavigation
@@ -92,6 +93,9 @@ class MainActivity : ComponentActivity() {
     private val openMany = registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         answerFiles(uris)
     }
+
+    /** RECORD_AUDIO for the page's dictation mic; registered before STARTED. */
+    private val mic = MicrophoneAccess.register(this)
 
     private fun answerFiles(uris: List<Uri>?) {
         val d = pendingFiles
@@ -241,6 +245,10 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 runCatching { CustomTabsIntent.Builder().build().launchUrl(this@MainActivity, Uri.parse(url)) }
             }
+        }
+
+        override fun requestMicrophone(done: (Boolean) -> Unit) {
+            runOnUiThread { mic.request(done) }
         }
 
         override fun onRendererGone(view: WebView) {

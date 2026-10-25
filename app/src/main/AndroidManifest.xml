@@ -5,6 +5,15 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Asked for at run time, right after pairing (API 33+). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Dictation: muster's page records through getUserMedia. RECORD_AUDIO
+         is asked for at run time, when the page first asks (MicrophoneAccess).
+         WebView's audio capture also needs MODIFY_AUDIO_SETTINGS (an
+         install-time permission): without it WebView logs "Requires
+         MODIFY_AUDIO_SETTINGS and RECORD_AUDIO", offers no recording device,
+         and getUserMedia fails with NotReadableError even after the user
+         allows the microphone (measured on an API 36 emulator). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
 
     <!-- Custom Tabs for links off the muster origin. -->
     <queries>

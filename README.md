@@ -28,6 +28,12 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   opens the system picker and hands the page `content://` URIs only; muster's
   `alert`/`confirm` are native dialogs. A URL the shell cannot parse is
   refused, never waved through.
+- **The microphone (dictation):** the page gets audio capture only when the
+  request comes from exactly the muster origin and asks for audio alone;
+  camera, MIDI, protected media and every other origin are denied. The app
+  asks Android for RECORD_AUDIO the first time the page wants it. If the
+  microphone was turned off for the app ("Don't allow" twice), a dialog
+  offers the app's settings page instead of a silent refusal.
 - **The bridge:** `musterApp`, a `WebViewCompat.addWebMessageListener`
   restricted to the exact origin, main frame only. It understands the two
   messages muster sends: `pair` and `open-notification-settings`.
