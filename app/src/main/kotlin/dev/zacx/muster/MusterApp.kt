@@ -5,6 +5,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import androidx.work.Configuration
+import androidx.work.WorkManager
 import dev.zacx.muster.core.auth.AesGcmAead
 import dev.zacx.muster.core.auth.DataStoreDeviceStore
 import dev.zacx.muster.core.auth.DeviceStore
@@ -16,13 +18,23 @@ import dev.zacx.muster.feature.notify.AndroidNotifier
 import dev.zacx.muster.feature.notify.Channels
 import dev.zacx.muster.feature.push.PushHandler
 import dev.zacx.muster.feature.push.PushRegistrar
+import dev.zacx.muster.shell.ShellLocalState
+import dev.zacx.muster.shell.ShellSnapshot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /** Wires the modules together. One instance of each store per process. */
-class MusterApp : Application() {
+class MusterApp : Application(), Configuration.Provider {
+    /**
+     * WorkManager starts on first use, not at every process start (its
+     * App Startup initializer is removed in the manifest): a cold start of
+     * the shell must not pay for it.
+     */
+    override val workManagerConfiguration: Configuration get() = Configuration.Builder().build()
+
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val store: DeviceStore by lazy {
@@ -36,13 +48,18 @@ class MusterApp : Application() {
 
     val pushHandler by lazy { PushHandler(notifier) }
 
-    val registrar by lazy { PushRegistrar(store, ::DeviceApi, onForget = { old -> old.keyAlias?.let { a -> runCatching { keys.delete(a) } } }) }
+    /** The shell's picture and background job, and when they go ([ShellLocalState]). */
+    val local by lazy { ShellLocalState(ShellSnapshot(noBackupFilesDir), { WorkManager.getInstance(this) }) }
+
+    val registrar by lazy { newRegistrar(store, ::DeviceApi, { a -> keys.delete(a) }, local) }
 
     fun pairing(origin: String) = Pairing(DeviceApi(origin), keys, store)
 
     override fun onCreate() {
+        StartupProbe.mark("app.onCreate.start")
         super.onCreate()
         Channels.ensure(this)
+        StartupProbe.mark("app.onCreate.end")
     }
 
     private fun tapIntent(tag: String, path: String?): PendingIntent = tapPendingIntent(this, tag, path)
@@ -66,6 +83,22 @@ class MusterApp : Application() {
         }
 
         fun from(c: Context) = c.applicationContext as MusterApp
+
+        /**
+         * The push registrar, wired so that muster ending the pairing (a 401
+         * seen in the foreground, by the background job or at push
+         * registration) deletes the step-up key and forgets the shell's
+         * picture and job ([ShellLocalState.forget]) before the call returns.
+         */
+        fun newRegistrar(
+            store: DeviceStore,
+            api: (String) -> DeviceApi,
+            deleteKey: (String) -> Unit,
+            local: ShellLocalState,
+        ) = PushRegistrar(store, api, onForget = { old ->
+            old.keyAlias?.let { a -> withContext(Dispatchers.IO) { runCatching { deleteKey(a) } } }
+            local.forget()
+        })
 
         fun deviceName(): String = listOf(Build.MANUFACTURER, Build.MODEL)
             .filter { it.isNotBlank() }.distinct().joinToString(" ").ifBlank { "Android phone" }

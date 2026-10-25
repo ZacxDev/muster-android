@@ -57,6 +57,32 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   tag. POST_NOTIFICATIONS is asked for right after pairing.
 - **Phone settings** (long-press the launcher icon): pairing, step-up key,
   push state, unpair.
+- **Opening (0.1.2):** the launcher shows the home page's last frame until
+  the live page paints over it. The frame is a JPEG of the board, so it is a
+  new copy of board text at rest: app-private, in `noBackupFilesDir` (never
+  backed up), never shown on the lock screen, home page and same server only.
+  It is deleted when any page lands on sign-in, when the home load lands
+  elsewhere, on unpair, when muster ends the pairing, on change server, and
+  when it is more than 24 hours old. While it is up it swallows taps and shows
+  a loading bar; it goes when the page has painted, on any page finish or
+  main-frame error, and after 5 seconds whatever happens. The WebView's
+  background is muster's dark background, not white. Leaving the app flushes
+  the WebView's cookies to disk, so a sign-in survives the process being
+  killed right after it.
+- **Background refresh (0.1.2), paired phones only:** a WorkManager job every
+  15 minutes (network connected, battery not low) reads `/api/device/config`
+  with the device credential, so a pairing muster ended is dropped, and
+  starts Chromium in that process, so an open while Android still keeps the
+  process is a warm start. It is scheduled only once the phone is paired, and
+  cancelled on unpair, on revocation and on change server; a run that finds
+  the phone unpaired cancels it and starts no Chromium. A shown push starts
+  Chromium too. Nothing renders or fetches muster pages in the background:
+  the pages need the session cookie, which stays in the WebView. Its battery
+  and memory cost on a real phone has not been measured.
+- **Startup timing (debug builds):** `adb logcat -s MusterStartup` logs each
+  cold-start phase in ms since the process started, and the page's
+  Navigation and Paint Timing. Every build reports "Fully drawn" when the
+  first muster page is on screen.
 
 ### 🔴 Uploaded files are not rendered
 

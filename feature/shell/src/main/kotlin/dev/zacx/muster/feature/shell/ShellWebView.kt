@@ -62,7 +62,21 @@ object ShellWebView {
 
         /** The renderer crashed or was killed: drop this WebView and make a new one. */
         fun onRendererGone(view: WebView)
+
+        /**
+         * A main-frame load milestone ([PageEvent]). The app's debug startup
+         * probe and `reportFullyDrawn` listen, and the app takes its
+         * last-frame picture away on it; nothing here may change what loads.
+         */
+        fun onPageEvent(view: WebView, event: PageEvent, url: String) {}
     }
+
+    /**
+     * Main-frame load milestones, in the order the WebView reports them;
+     * [ERROR] is a main-frame load that failed (no network, a TLS or DNS
+     * error), reported as it happens.
+     */
+    enum class PageEvent { STARTED, COMMIT_VISIBLE, FINISHED, ERROR }
 
     @SuppressLint("SetJavaScriptEnabled")
     fun configure(webView: WebView, policy: OriginPolicy, callbacks: Callbacks) {
@@ -113,7 +127,21 @@ object ShellWebView {
             if (ShellNavigation.decide(url, policy) == ShellNavigation.Verdict.BLOCKED_ATTACHMENT) {
                 view.stopLoading()
                 cb.onBlockedAttachment()
+                return
             }
+            cb.onPageEvent(view, PageEvent.STARTED, url)
+        }
+
+        override fun onPageCommitVisible(view: WebView, url: String) {
+            cb.onPageEvent(view, PageEvent.COMMIT_VISIBLE, url)
+        }
+
+        override fun onPageFinished(view: WebView, url: String) {
+            cb.onPageEvent(view, PageEvent.FINISHED, url)
+        }
+
+        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+            if (request.isForMainFrame) cb.onPageEvent(view, PageEvent.ERROR, request.url.toString())
         }
 
         override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
