@@ -57,6 +57,13 @@ object ShellWebView {
         /** A JS alert ([confirm] false) or confirm from muster: show it natively, then call [done] once. */
         fun jsDialog(message: String, confirm: Boolean, done: (Boolean) -> Unit)
 
+        /**
+         * muster's page asked for the microphone: make sure the app holds
+         * RECORD_AUDIO (asking Android if not) and call [done] once with
+         * whether it does. The default refuses.
+         */
+        fun requestMicrophone(done: (Boolean) -> Unit) = done(false)
+
         /** The WebView's history changed: re-sync back handling ([ShellBack.sync]). */
         fun onHistoryChanged()
 
