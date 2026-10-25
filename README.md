@@ -38,7 +38,28 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   the app's settings page instead of a silent refusal.
 - **The bridge:** `musterApp`, a `WebViewCompat.addWebMessageListener`
   restricted to the exact origin, main frame only. It understands the two
-  messages muster sends: `pair` and `open-notification-settings`.
+  messages muster sends, `pair` and `open-notification-settings`, and
+  `touch-start`, which the app's own pull-to-refresh script sends (below).
+- **Pull to refresh:** pulling down at the top of a page reloads it, with a
+  spinner in muster's colours until the page finishes (15 s at most). A pull
+  refreshes only when nothing under the finger can still scroll up. The
+  WebView's own scroll position cannot tell: muster's agent page scrolls its
+  chat log inside a document that does not scroll. So a document-start script
+  (`WebViewCompat.addDocumentStartJavaScript`, the exact origin only, main
+  frame only) reports at each `touchstart` how far the document and the
+  scrollers under the finger are scrolled, and whether the finger is on an
+  overlay (a sheet, a dialog, the open sidebar) or on something that takes its
+  own drags, and whether a non-empty text field has focus:
+  `{"type":"touch-start","doc":"k3x9q2","seq":3,"doc_top":0,"inner_top":null,"owner":"page","editing":false}`.
+  `doc` and `seq` name the gesture (a random id per document, and its count
+  of gestures); the app counts DOWNs the same way and uses a report only for
+  the gesture it describes, so a late one never decides the next pull. It
+  carries scroll offsets, that count and the `editing` boolean only: no text,
+  nothing typed, no URL, and nothing goes back to the page. A pull never
+  reloads while a text field (input, textarea, contenteditable) has text in
+  it. A sideways swipe (a chip row), a second finger, the terminal and a
+  mirrored session (their path segments decoded first) never refresh. A
+  WebView without document-start scripts never refreshes.
 - **Pairing:** Account → Devices → **Pair this phone** hands the app a
   one-time code; the app asks you to confirm, re-checks the code's expiry,
   makes the step-up key, and redeems the code at `POST /api/device/pair`.
@@ -128,7 +149,7 @@ release has been published.
 | `core/model` | pure Kotlin: payload v2 and its parser, the action-id table, the action policy, the attachment gate |
 | `core/net` | pure Kotlin: the `/api/device/...` client (OkHttp, no redirects) |
 | `core/auth` | pairing, the step-up key and its policy, the sealed credential store |
-| `feature/shell` | the WebView: origin policy, navigation, bridge, insets |
+| `feature/shell` | the WebView: origin policy, navigation, bridge, insets, pull to refresh |
 | `feature/push` | the push handler (decrypted-only), the push-host check, registration |
 | `feature/notify` | channels and drawing notifications |
 | `feature/stepup` | the invisible step-up activity (Phase 2; a stub) |
