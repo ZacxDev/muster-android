@@ -25,17 +25,16 @@ import androidx.webkit.WebViewFeature
  */
 object WebAuthn {
     /**
-     * Turns WebAuthn on for [settings] as this app; false (and nothing set)
-     * when this WebView does not have the feature, so the page keeps offering
-     * no passkey, as before.
+     * Turns WebAuthn on for [settings] as this app. Where this WebView does
+     * not have the feature nothing is set, so the page keeps offering no
+     * passkey, as before.
      */
     fun enable(
         settings: WebSettings,
         supported: Boolean = WebViewFeature.isFeatureSupported(WebViewFeature.WEB_AUTHENTICATION),
         set: (WebSettings, Int) -> Unit = WebSettingsCompat::setWebAuthenticationSupport,
-    ): Boolean {
-        if (!supported) return false
+    ) {
+        if (!supported) return
         set(settings, WebSettingsCompat.WEB_AUTHENTICATION_SUPPORT_FOR_APP)
-        return true
     }
 }

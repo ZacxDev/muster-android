@@ -6,7 +6,6 @@ import androidx.activity.ComponentActivity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -31,7 +30,7 @@ class WebAuthnTest {
     @Test
     fun aWebViewWithTheFeatureGetsWebAuthnForTheApp() {
         val calls = mutableListOf<Pair<WebSettings, Int>>()
-        assertTrue(WebAuthn.enable(wv.settings, supported = true) { s, mode -> calls += s to mode })
+        WebAuthn.enable(wv.settings, supported = true) { s, mode -> calls += s to mode }
         assertEquals(1, calls.size)
         assertSame(wv.settings, calls[0].first)
         assertEquals(1, calls[0].second)
@@ -41,7 +40,7 @@ class WebAuthnTest {
     @Test
     fun aWebViewWithoutTheFeatureIsLeftAlone() {
         var called = false
-        assertFalse(WebAuthn.enable(wv.settings, supported = false) { _, _ -> called = true })
+        WebAuthn.enable(wv.settings, supported = false) { _, _ -> called = true }
         assertFalse(called)
     }
 

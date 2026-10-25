@@ -33,7 +33,10 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   `android:apk-key-hash:<unpadded base64url SHA-256 of the signing cert>`.
   For the release certificate below that is
   `android:apk-key-hash:9mAiKkY2M_bmWoehcB2eyGI2S6Rkno4J00uBca0g9eY`. A
-  debug-signed build has a different certificate, and so a different origin.
+  debug-signed build has a different certificate, and so a different origin:
+  it cannot use passkeys against production. AGP's debug key is a throwaway
+  generated per machine (per CI runner), so 🔴 never add a debug key's hash to
+  production's `assetlinks.json` or `GOTRUE_WEBAUTHN_RP_ORIGINS`.
   Passkey autofill (conditional mediation) does not work in a WebView.
 - **In the shell:** back follows the WebView's history; `<input type=file>`
   opens the system picker and hands the page `content://` URIs only; muster's
