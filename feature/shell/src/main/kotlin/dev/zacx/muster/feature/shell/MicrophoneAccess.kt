@@ -22,10 +22,15 @@ import androidx.core.content.edit
  * - **false** when a newer [request] replaces it while the prompt is up (the
  *   prompt stays and answers the newer one), or when the prompt cannot start.
  *
- * When the answer is "no" and Android showed nothing because the user chose
- * "Don't allow" before (asked before, and Android offers no rationale either
- * before or after the request), [Host.offerSettings] shows a dialog that opens
- * the app's settings page, so a blocked microphone is never a silent refusal.
+ * When the answer is "no" after the app has asked before, and Android offers
+ * no rationale either before or after the request, [Host.offerSettings] shows
+ * a dialog that opens the app's settings page, so a blocked microphone is
+ * never a silent refusal. That is what Android reports when it showed no
+ * prompt because the user chose "Don't allow" before; but it is ALSO what it
+ * reports when the user dismissed the prompt twice (back, or a tap outside),
+ * and the permission result does not tell the two apart. So the dialog says
+ * only what is true in both cases: the microphone is not allowed, and
+ * Settings can allow it. It never says the user turned it off.
  */
 class MicrophoneAccess(private val host: Host) {
 

@@ -31,9 +31,11 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
 - **The microphone (dictation):** the page gets audio capture only when the
   request comes from exactly the muster origin and asks for audio alone;
   camera, MIDI, protected media and every other origin are denied. The app
-  asks Android for RECORD_AUDIO the first time the page wants it. If the
-  microphone was turned off for the app ("Don't allow" twice), a dialog
-  offers the app's settings page instead of a silent refusal.
+  asks Android for RECORD_AUDIO the first time the page wants it. When
+  Android answers "no" without a rationale after an earlier ask (it showed no
+  prompt after "Don't allow", or the user dismissed its prompt twice; the app
+  cannot tell which), a dialog says the microphone isn't allowed and offers
+  the app's settings page instead of a silent refusal.
 - **The bridge:** `musterApp`, a `WebViewCompat.addWebMessageListener`
   restricted to the exact origin, main frame only. It understands the two
   messages muster sends: `pair` and `open-notification-settings`.

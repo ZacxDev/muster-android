@@ -157,6 +157,45 @@ class MicrophonePermissionTest {
         assertEquals(0, android.settingsOffered)
     }
 
+    /**
+     * Two prompts, each dismissed without an answer: Android reports exactly
+     * what it reports for a permanent "Don't allow" (asked before, no
+     * rationale either side), so the settings dialog does show on the second.
+     * Its text must therefore be true for a dismissal too
+     * (MicrophoneAccessActivityTest pins the text).
+     */
+    @Test
+    fun twoDismissedPromptsOfferSettingsOnTheSecondOnly() {
+        val first = Req(muster, RESOURCE_AUDIO_CAPTURE)
+        chrome.onPermissionRequest(first)
+        access.onResult(false) // dismissed: no rationale is set
+        assertEquals(listOf("deny"), first.answers)
+        assertEquals(0, android.settingsOffered)
+        val second = Req(muster, RESOURCE_AUDIO_CAPTURE)
+        chrome.onPermissionRequest(second)
+        assertEquals("Android was asked again", 2, android.launches)
+        access.onResult(false) // dismissed again
+        assertEquals(listOf("deny"), second.answers)
+        assertEquals(1, android.settingsOffered)
+    }
+
+    /**
+     * A result with nobody waiting (a stray second result after the first was
+     * answered) offers no settings, even when everything else says blocked.
+     */
+    @Test
+    fun aResultWithNobodyWaitingOffersNothing() {
+        android.asked = true
+        val got = mutableListOf<Boolean>()
+        access.request { got += it }
+        access.onResult(false)
+        assertEquals(listOf(false), got)
+        assertEquals("control: the answered request is offered settings", 1, android.settingsOffered)
+        access.onResult(false) // nobody waits now
+        assertEquals(listOf(false), got)
+        assertEquals(1, android.settingsOffered)
+    }
+
     @Test
     fun noPromptMeansDenied() {
         android.launchFails = true

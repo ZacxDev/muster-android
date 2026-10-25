@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="mic_blocked_title">Microphone is off for muster</string>
-    <string name="mic_blocked_message">Dictation needs the microphone, and it was turned off for this app. To dictate, open the app\'s settings, choose Permissions, then Microphone, and allow it.</string>
+    <!-- True whether the user chose "Don't allow" or only dismissed Android's prompt: the app cannot tell the two apart (MicrophoneAccess). -->
+    <string name="mic_blocked_title">Microphone not allowed</string>
+    <string name="mic_blocked_message">Microphone isn\'t allowed for muster. You can allow it in Settings, under Permissions, then Microphone.</string>
     <string name="mic_open_settings">Open settings</string>
     <string name="mic_not_now">Not now</string>
 </resources>

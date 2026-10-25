@@ -77,6 +77,10 @@ class MicrophoneAccessActivityTest {
         assertEquals(false, got)
         val d = ShadowAlertDialog.getLatestAlertDialog() as AlertDialog
         assertTrue(d.isShowing)
+        // The text is true whether the user chose "Don't allow" or dismissed the prompt twice: pinned whole.
+        val sd = shadowOf(d)
+        assertEquals("Microphone not allowed", sd.title.toString())
+        assertEquals("Microphone isn't allowed for muster. You can allow it in Settings, under Permissions, then Microphone.", sd.message.toString())
         d.getButton(AlertDialog.BUTTON_POSITIVE).performClick()
         shadowOf(Looper.getMainLooper()).idle() // the dialog posts its click
         // Robolectric hands back the most recent start first: the settings page.
