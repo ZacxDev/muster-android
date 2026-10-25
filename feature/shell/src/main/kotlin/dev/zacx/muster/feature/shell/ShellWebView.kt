@@ -26,6 +26,7 @@ import java.time.Instant
  * - uploaded files are refused at the top level and as subresources until
  *   muster's sandbox is confirmed (AttachmentGate);
  * - a download is handed to the browser, URL only ([DownloadHandoff]);
+ * - WebAuthn (passkeys) is on, as this app, where the WebView has it ([WebAuthn]);
  * - pull to refresh asks the page what is under the finger ([PullProbeScript],
  *   [ShellRefreshLayout]).
  */
@@ -88,7 +89,12 @@ object ShellWebView {
     enum class PageEvent { STARTED, COMMIT_VISIBLE, FINISHED, ERROR }
 
     @SuppressLint("SetJavaScriptEnabled")
-    fun configure(webView: WebView, policy: OriginPolicy, callbacks: Callbacks) {
+    fun configure(
+        webView: WebView,
+        policy: OriginPolicy,
+        callbacks: Callbacks,
+        enableWebAuthn: (android.webkit.WebSettings) -> Unit = { WebAuthn.enable(it) },
+    ) {
         webView.settings.apply {
             javaScriptEnabled = true // muster's UI is htmx
             domStorageEnabled = true // its service worker and offline shell
@@ -99,6 +105,8 @@ object ShellWebView {
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             setGeolocationEnabled(false)
         }
+        // Passkeys (sign-in and "Confirm it's you"), as this app ([WebAuthn]).
+        enableWebAuthn(webView.settings)
         webView.webViewClient = Client(policy, callbacks)
         webView.webChromeClient = ShellChromeClient(policy, callbacks)
         webView.setDownloadListener(DownloadHandoff(callbacks::openExternally))

@@ -24,6 +24,20 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   `addJavascriptInterface`) with password sign-in on muster's own page. The
   native container pads for the system bars, cutout and keyboard, because CSS
   `env(safe-area-inset-*)` reads 0 in a WebView (Phase 0, S12).
+- **Passkeys:** the WebView runs WebAuthn as this app
+  (`WEB_AUTHENTICATION_SUPPORT_FOR_APP`, where the WebView has the feature),
+  so muster's passkey sign-in and its "Confirm it's you" passkey work in the
+  shell. Android uses a passkey only if the server lists this package and the
+  signing certificate in `/.well-known/assetlinks.json`, and the server's
+  WebAuthn backend must accept the app's origin,
+  `android:apk-key-hash:<unpadded base64url SHA-256 of the signing cert>`.
+  For the release certificate below that is
+  `android:apk-key-hash:9mAiKkY2M_bmWoehcB2eyGI2S6Rkno4J00uBca0g9eY`. A
+  debug-signed build has a different certificate, and so a different origin:
+  it cannot use passkeys against production. AGP's debug key is a throwaway
+  generated per machine (per CI runner), so 🔴 never add a debug key's hash to
+  production's `assetlinks.json` or `GOTRUE_WEBAUTHN_RP_ORIGINS`.
+  Passkey autofill (conditional mediation) does not work in a WebView.
 - **In the shell:** back follows the WebView's history; `<input type=file>`
   opens the system picker and hands the page `content://` URIs only; muster's
   `alert`/`confirm` are native dialogs. A URL the shell cannot parse is
