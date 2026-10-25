@@ -42,6 +42,7 @@ import dev.zacx.muster.feature.shell.MicrophoneAccess
 import dev.zacx.muster.feature.shell.OriginPolicy
 import dev.zacx.muster.feature.shell.ShellBack
 import dev.zacx.muster.feature.shell.ShellNavigation
+import dev.zacx.muster.feature.shell.ShellRefreshLayout
 import dev.zacx.muster.feature.shell.ShellWebView
 import dev.zacx.muster.push.MusterPushService
 import dev.zacx.muster.shell.ShellCookies
@@ -222,7 +223,7 @@ class MainActivity : ComponentActivity() {
         wv.setBackgroundColor(SHELL_BACKGROUND)
         ShellWebView.configure(wv, p, shellCallbacks(p))
         StartupProbe.attach(wv, p.allowedOriginRule)
-        page.addView(wv, 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        page.addView(ShellRefreshLayout(this, wv), 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         webView = wv
         back.sync()
         StartupProbe.mark("webview.loadUrl")
@@ -236,6 +237,7 @@ class MainActivity : ComponentActivity() {
                 when (message) {
                     is BridgeMessage.Pair -> confirmPairing(p.allowedOriginRule, message.code, message.expiresAt)
                     BridgeMessage.OpenNotificationSettings -> openNotificationSettings()
+                    is BridgeMessage.TouchStart -> webView?.let(ShellRefreshLayout::of)?.onProbe(message.probe)
                     is BridgeMessage.Refused -> Unit
                 }
             }

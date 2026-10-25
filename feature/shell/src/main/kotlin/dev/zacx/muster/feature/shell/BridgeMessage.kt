@@ -2,6 +2,7 @@ package dev.zacx.muster.feature.shell
 
 import dev.zacx.muster.core.net.CredentialShape
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.time.Instant
@@ -13,10 +14,15 @@ import java.time.format.DateTimeParseException
  * "The shell"). Each is a JSON string. The bridge never carries a credential
  * from the app to the page.
  *
- * Phase 1 understands the two messages muster sends today:
+ * The app understands the two messages muster's pages send:
  *
  *     {"type":"pair","code":"mdp_…","expires_at":"2026-10-21T12:00:00Z"}
  *     {"type":"open-notification-settings"}
+ *
+ * and one the app's own document-start script sends from muster's pages
+ * (PullProbeScript; it carries scroll geometry only):
+ *
+ *     {"type":"touch-start","doc_top":0,"inner_top":null,"owner":"page"}
  *
  * Everything else is refused. The design also names "request
  * POST_NOTIFICATIONS" and "theme"; muster sends neither yet, and the app asks
@@ -27,6 +33,9 @@ sealed interface BridgeMessage {
     data class Pair(val code: String, val expiresAt: Instant?) : BridgeMessage
 
     data object OpenNotificationSettings : BridgeMessage
+
+    /** What is under the finger at a `touchstart`, for pull to refresh ([PullGate]). */
+    data class TouchStart(val probe: PullGate.Probe) : BridgeMessage
 
     data class Refused(val reason: String) : BridgeMessage
 
@@ -66,8 +75,22 @@ sealed interface BridgeMessage {
                     Pair(code, exp)
                 }
                 "open-notification-settings" -> OpenNotificationSettings
+                PullProbeScript.MESSAGE_TYPE -> touchStart(obj)
                 else -> Refused("unknown message")
             }
+        }
+
+        /** Scroll offsets are whole CSS px; anything else (a string, a fraction, absent) is not the script's. */
+        private fun touchStart(obj: JsonObject): BridgeMessage {
+            fun int(k: String): Int? = (obj[k] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()
+            val docTop = int("doc_top") ?: return Refused("touch-start without doc_top")
+            val innerTop = when (obj["inner_top"]) {
+                null, JsonNull -> null
+                else -> int("inner_top") ?: return Refused("touch-start with a bad inner_top")
+            }
+            val owner = PullGate.Owner.fromWire((obj["owner"] as? JsonPrimitive)?.takeIf { it.isString }?.content)
+                ?: return Refused("touch-start with an unknown owner")
+            return TouchStart(PullGate.Probe(docTop, innerTop, owner))
         }
     }
 }

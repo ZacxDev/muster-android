@@ -25,7 +25,9 @@ import java.time.Instant
  *   restricted to the exact origin (never `*`), main frame only;
  * - uploaded files are refused at the top level and as subresources until
  *   muster's sandbox is confirmed (AttachmentGate);
- * - a download is handed to the browser, URL only ([DownloadHandoff]).
+ * - a download is handed to the browser, URL only ([DownloadHandoff]);
+ * - pull to refresh asks the page what is under the finger ([PullProbeScript],
+ *   [ShellRefreshLayout]).
  */
 object ShellWebView {
     /**
@@ -113,6 +115,8 @@ object ShellWebView {
                     BridgeMessage.parse(data, sourceOrigin.toString(), isMainFrame, policy, Instant.now()),
                 )
             }
+            // Pull to refresh's probe reports through this listener: no bridge, no probe, no pull.
+            PullProbeScript.install(webView, policy)
         }
         // Without WEB_MESSAGE_LISTENER (a very old WebView) there is no bridge:
         // the page then shows no "Pair this phone" button, and nothing pairs.
@@ -144,6 +148,8 @@ object ShellWebView {
         }
 
         override fun onPageFinished(view: WebView, url: String) {
+            // Both jobs: pull to refresh's spinner stops, and the app hears the milestone.
+            ShellRefreshLayout.of(view)?.onPageFinished()
             cb.onPageEvent(view, PageEvent.FINISHED, url)
         }
 
