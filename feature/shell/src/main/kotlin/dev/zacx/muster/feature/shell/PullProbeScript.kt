@@ -9,8 +9,13 @@ import androidx.webkit.WebViewFeature
  * one-finger `touchstart` it tells the app, over the `musterApp` bridge, what
  * is under the finger:
  *
- *     {"type":"touch-start","doc_top":0,"inner_top":null,"owner":"page"}
+ *     {"type":"touch-start","doc":"k3x9q2","seq":3,"doc_top":0,"inner_top":null,"owner":"page","editing":false}
  *
+ * - `doc`: a random id for this document, made when the script starts;
+ * - `seq`: which gesture this is: the count of gestures that started in this
+ *   document (a `touchstart` with no finger down before it, one finger or
+ *   more), from 1. The app counts DOWNs the same way and keeps a probe only
+ *   if its count is the gesture in progress's ([PullGate.onProbe]);
  * - `doc_top`: the document's scroll offset plus the pinch-zoom offset
  *   (`visualViewport.offsetTop`), CSS px, rounded up;
  * - `inner_top`: the largest `scrollTop` among the elements between the touch
@@ -19,10 +24,13 @@ import androidx.webkit.WebViewFeature
  * - `owner`: `overlay` when the target is inside a fixed-position element or a
  *   dialog, or a modal `<dialog>` is open; `gestures` when an element on the
  *   way up takes its own vertical drags (`touch-action` without `pan-y`, an
- *   xterm); otherwise `page`.
+ *   xterm); otherwise `page`;
+ * - `editing`: true when the focused element is a non-empty text field (an
+ *   `<input>` of a text type, a `<textarea>`, or a contenteditable). Only
+ *   this boolean is sent: the script reads a field's length, never its text.
  *
- * It sends geometry only: no text, no URL, nothing typed, and the app sends
- * nothing back. It runs in the main frame only, and is installed with
+ * It sends geometry, a count and that boolean only: no text, no URL, nothing
+ * typed, and the app sends nothing back. It runs in the main frame only, and is installed with
  * `allowedOriginRules` set to exactly the paired origin, so no other origin's
  * document runs it. The listener re-checks origin and frame
  * ([BridgeMessage.parse]).
@@ -57,6 +65,18 @@ object PullProbeScript {
   if (window.top !== window || window.__musterPullProbe) return;
   window.__musterPullProbe = true;
   var SCROLLS = /(auto|scroll|overlay)/;
+  var TEXT_INPUT = { text: 1, search: 1, email: 1, url: 1, tel: 1, password: 1, number: 1 };
+  var DOC = Math.random().toString(36).slice(2, 12) || 'd';
+  var seq = 0;
+  function editing() {
+    var a = document.activeElement;
+    if (!a || a === document.body || a === document.documentElement) return false;
+    if (a.isContentEditable) return (a.textContent || '').length > 0;
+    var tag = (a.tagName || '').toLowerCase();
+    if (tag === 'textarea') return (a.value || '').length > 0;
+    if (tag === 'input') return TEXT_INPUT.hasOwnProperty((a.type || 'text').toLowerCase()) && (a.value || '').length > 0;
+    return false;
+  }
   function elementOf(n) { return n && n.nodeType === 1 ? n : (n && n.parentElement) || null; }
   function ownsDrags(cs, el) {
     var ta = cs.touchAction || 'auto';
@@ -75,7 +95,11 @@ object PullProbeScript {
   }
   document.addEventListener('touchstart', function (e) {
     try {
-      if (!e.touches || e.touches.length !== 1) return;
+      if (!e.touches || !e.changedTouches) return;
+      // A gesture starts when no finger was down before: the app counts its DOWN the same way.
+      if (e.touches.length !== e.changedTouches.length) return;
+      seq++;
+      if (e.touches.length !== 1) return;
       var bridge = window.${ShellWebView.BRIDGE_NAME};
       if (!bridge || !bridge.postMessage) return;
       var se = document.scrollingElement || document.documentElement;
@@ -89,7 +113,9 @@ object PullProbeScript {
       }
       var vv = window.visualViewport;
       var docTop = Math.ceil(se.scrollTop + (vv ? vv.offsetTop : 0));
-      bridge.postMessage(JSON.stringify({ type: '$MESSAGE_TYPE', doc_top: docTop, inner_top: inner, owner: owner(start) }));
+      bridge.postMessage(JSON.stringify({
+        type: '$MESSAGE_TYPE', doc: DOC, seq: seq, doc_top: docTop, inner_top: inner, owner: owner(start), editing: editing()
+      }));
     } catch (err) {}
   }, { capture: true, passive: true });
 })();

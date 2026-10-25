@@ -45,10 +45,11 @@ class ShellRefreshLayoutTest {
      * the down), then moves along (dx, dy) in steps. Returns whether the
      * layout took the gesture over (started a pull).
      */
-    private fun pull(probe: Probe?, dx: Float = 0f, dy: Float = 10f * slop): Boolean {
+    private fun pull(probe: Probe?, dx: Float = 0f, dy: Float = 10f * slop, seq: Long? = null): Boolean {
         wv.loadUrl(url)
+        gestures++
         if (layout.onInterceptTouchEvent(ev(MotionEvent.ACTION_DOWN, 500f, 300f))) return true
-        probe?.let(layout::onProbe)
+        probe?.let { layout.onProbe(BridgeMessage.TouchStart(doc, seq ?: gestures, it)) }
         for (i in 1..10) {
             if (layout.onInterceptTouchEvent(ev(MotionEvent.ACTION_MOVE, 500f + dx * i / 10, 300f + dy * i / 10))) return true
         }
@@ -56,7 +57,11 @@ class ShellRefreshLayoutTest {
     }
 
     private var url = "https://m.example.test/agents"
-    private val atTop = Probe(0, null, Owner.PAGE)
+    private val atTop = Probe(0, null, Owner.PAGE, editing = false)
+
+    /** The page's side of the gesture count: what the script would send. */
+    private var gestures = 0L
+    private var doc = "k3x9q2"
 
     @Test
     fun theLayoutWrapsTheWebView() {
@@ -77,9 +82,20 @@ class ShellRefreshLayoutTest {
     @Test
     fun aPullWithNoProbeOrNotAtTheTopDoesNotStart() {
         assertFalse(pull(null))
-        assertFalse(pull(Probe(docTop = 300, innerTop = null, owner = Owner.PAGE)))
-        assertFalse(pull(Probe(docTop = 0, innerTop = 300, owner = Owner.PAGE)))
-        assertFalse(pull(Probe(docTop = 0, innerTop = null, owner = Owner.OVERLAY)))
+        assertFalse(pull(atTop.copy(docTop = 300)))
+        assertFalse(pull(atTop.copy(innerTop = 300)))
+        assertFalse(pull(atTop.copy(owner = Owner.OVERLAY)))
+        assertFalse(pull(atTop.copy(editing = true)))
+        assertTrue("control: the same layout, a plain probe", pull(atTop))
+    }
+
+    /** 🔴 Through real MotionEvents: the previous gesture's probe, arriving now, starts no pull. */
+    @Test
+    fun aProbeFromThePreviousGestureDoesNotStartAPull() {
+        assertFalse(pull(probe = null)) // gesture 1: its probe has not arrived
+        assertFalse(pull(atTop, seq = 1)) // gesture 2 receives gesture 1's probe
+        assertFalse(pull(atTop)) // gesture 3's own, still out of step after that
+        assertTrue(pull(atTop)) // gesture 4: in step again
     }
 
     @Test
@@ -108,26 +124,45 @@ class ShellRefreshLayoutTest {
         assertFalse(layout.isRefreshing)
     }
 
-    /** The seam: the shell's own WebViewClient is what tells the layout the page finished. */
+    /**
+     * The seam: the shell's own WebViewClient is what tells the layout the
+     * page finished, and the same callback still reports the milestone to the
+     * app (which takes its last-frame picture away on it): one override, both jobs.
+     */
     @Test
-    fun theShellsWebViewClientStopsTheSpinner() {
-        ShellWebView.configure(
-            wv, OriginPolicy.forServer("https://m.example.test")!!,
-            object : ShellWebView.Callbacks {
-                override fun onBridgeMessage(message: BridgeMessage) = Unit
-                override fun openExternally(url: String) = Unit
-                override fun onBlockedAttachment() = Unit
-                override fun onRendererGone(view: WebView) = Unit
-                override fun chooseFiles(mimeTypes: List<String>, multiple: Boolean, deliver: (List<android.net.Uri>?) -> Unit) = Unit
-                override fun jsDialog(message: String, confirm: Boolean, done: (Boolean) -> Unit) = Unit
-                override fun onHistoryChanged() = Unit
-            },
-        )
+    fun theShellsWebViewClientStopsTheSpinnerAndStillReportsTheFinish() {
+        val events = mutableListOf<ShellWebView.PageEvent>()
+        configureShell { events += it }
         layout.refresh()
         assertTrue(layout.isRefreshing)
         shadowOf(wv).webViewClient.onPageFinished(wv, "https://m.example.test/agents")
         assertFalse(layout.isRefreshing)
+        assertEquals(listOf(ShellWebView.PageEvent.FINISHED), events)
     }
+
+    /** The seam: the shell's own WebViewClient tells the gate a new document started, which counts from 1. */
+    @Test
+    fun theShellsWebViewClientRestartsTheCountOnANewPage() {
+        configureShell()
+        assertTrue(pull(atTop)) // gesture 1 of the first document
+        shadowOf(wv).webViewClient.onPageStarted(wv, "https://m.example.test/agents", null) // the reload
+        doc = "n3wd0c"
+        assertTrue(pull(atTop, seq = 1))
+    }
+
+    private fun configureShell(onEvent: (ShellWebView.PageEvent) -> Unit = {}) = ShellWebView.configure(
+        wv, OriginPolicy.forServer("https://m.example.test")!!,
+        object : ShellWebView.Callbacks {
+            override fun onPageEvent(view: WebView, event: ShellWebView.PageEvent, url: String) = onEvent(event)
+            override fun onBridgeMessage(message: BridgeMessage) = Unit
+            override fun openExternally(url: String) = Unit
+            override fun onBlockedAttachment() = Unit
+            override fun onRendererGone(view: WebView) = Unit
+            override fun chooseFiles(mimeTypes: List<String>, multiple: Boolean, deliver: (List<android.net.Uri>?) -> Unit) = Unit
+            override fun jsDialog(message: String, confirm: Boolean, done: (Boolean) -> Unit) = Unit
+            override fun onHistoryChanged() = Unit
+        },
+    )
 
     @Test
     fun theSpinnerStopsAtTheTimeoutIfThePageNeverFinishes() {

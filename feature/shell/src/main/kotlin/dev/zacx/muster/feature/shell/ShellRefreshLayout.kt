@@ -45,8 +45,11 @@ class ShellRefreshLayout(
         setOnRefreshListener { refresh() }
     }
 
-    /** The page's `touch-start` report for the gesture in progress. */
-    fun onProbe(probe: PullGate.Probe) = gate.onProbe(probe)
+    /** The page's `touch-start` report; the gate keeps it only if it is the gesture in progress's. */
+    fun onProbe(m: BridgeMessage.TouchStart) = gate.onProbe(m.doc, m.seq, m.probe)
+
+    /** `WebViewClient.onPageStarted` for this layout's WebView: a new document counts its gestures from 1. */
+    fun onPageStarted() = gate.onPageStarted()
 
     /** `WebViewClient.onPageFinished` for this layout's WebView: the spinner's work is done. */
     fun onPageFinished() {

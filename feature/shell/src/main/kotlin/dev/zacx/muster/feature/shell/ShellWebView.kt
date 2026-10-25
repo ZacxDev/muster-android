@@ -134,6 +134,8 @@ object ShellWebView {
         }
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+            // Pull to refresh's gesture count restarts with the new document.
+            ShellRefreshLayout.of(view)?.onPageStarted()
             // loadUrl and history navigation do not pass shouldOverrideUrlLoading.
             if (ShellNavigation.decide(url, policy) == ShellNavigation.Verdict.BLOCKED_ATTACHMENT) {
                 view.stopLoading()

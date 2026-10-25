@@ -237,7 +237,7 @@ class MainActivity : ComponentActivity() {
                 when (message) {
                     is BridgeMessage.Pair -> confirmPairing(p.allowedOriginRule, message.code, message.expiresAt)
                     BridgeMessage.OpenNotificationSettings -> openNotificationSettings()
-                    is BridgeMessage.TouchStart -> webView?.let(ShellRefreshLayout::of)?.onProbe(message.probe)
+                    is BridgeMessage.TouchStart -> webView?.let(ShellRefreshLayout::of)?.onProbe(message)
                     is BridgeMessage.Refused -> Unit
                 }
             }

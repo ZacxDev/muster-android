@@ -49,12 +49,17 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   frame only) reports at each `touchstart` how far the document and the
   scrollers under the finger are scrolled, and whether the finger is on an
   overlay (a sheet, a dialog, the open sidebar) or on something that takes its
-  own drags:
-  `{"type":"touch-start","doc_top":0,"inner_top":null,"owner":"page"}`. It
-  carries scroll offsets only, nothing typed, no URL, and nothing goes back
-  to the page. A sideways swipe (a chip row), a second finger, the terminal
-  and a mirrored session never refresh. A WebView without document-start
-  scripts never refreshes.
+  own drags, and whether a non-empty text field has focus:
+  `{"type":"touch-start","doc":"k3x9q2","seq":3,"doc_top":0,"inner_top":null,"owner":"page","editing":false}`.
+  `doc` and `seq` name the gesture (a random id per document, and its count
+  of gestures); the app counts DOWNs the same way and uses a report only for
+  the gesture it describes, so a late one never decides the next pull. It
+  carries scroll offsets, that count and the `editing` boolean only: no text,
+  nothing typed, no URL, and nothing goes back to the page. A pull never
+  reloads while a text field (input, textarea, contenteditable) has text in
+  it. A sideways swipe (a chip row), a second finger, the terminal and a
+  mirrored session (their path segments decoded first) never refresh. A
+  WebView without document-start scripts never refreshes.
 - **Pairing:** Account → Devices → **Pair this phone** hands the app a
   one-time code; the app asks you to confirm, re-checks the code's expiry,
   makes the step-up key, and redeems the code at `POST /api/device/pair`.

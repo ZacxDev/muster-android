@@ -25,4 +25,6 @@ dependencies {
     testImplementation(libs.junit)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
+    // Runs the injected pull-to-refresh script for real (PullProbeScriptJsTest): ES5 on the JVM, no browser.
+    testImplementation(libs.rhino)
 }

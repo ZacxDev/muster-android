@@ -55,26 +55,27 @@ class PullProbeTest {
     @Test
     fun touchStartMessagesAreUnderstood() {
         assertEquals(
-            BridgeMessage.TouchStart(Probe(0, null, Owner.PAGE)),
-            parse("""{"type":"touch-start","doc_top":0,"inner_top":null,"owner":"page"}"""),
+            BridgeMessage.TouchStart("k3x9q2", 1, Probe(0, null, Owner.PAGE, editing = false)),
+            parse("""{"type":"touch-start","doc":"k3x9q2","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false}"""),
         )
         assertEquals(
-            BridgeMessage.TouchStart(Probe(0, null, Owner.PAGE)),
-            parse("""{"type":"touch-start","doc_top":0,"owner":"page"}"""),
+            BridgeMessage.TouchStart("k3x9q2", 2, Probe(0, null, Owner.PAGE, editing = true)),
+            parse("""{"type":"touch-start","doc":"k3x9q2","seq":2,"doc_top":0,"owner":"page","editing":true}"""),
         )
         assertEquals(
-            BridgeMessage.TouchStart(Probe(12, 367, Owner.OVERLAY)),
-            parse("""{"type":"touch-start","doc_top":12,"inner_top":367,"owner":"overlay"}"""),
+            BridgeMessage.TouchStart("a", 41, Probe(12, 367, Owner.OVERLAY, editing = false)),
+            parse("""{"type":"touch-start","doc":"a","seq":41,"doc_top":12,"inner_top":367,"owner":"overlay","editing":false}"""),
         )
         assertEquals(
-            BridgeMessage.TouchStart(Probe(0, 0, Owner.GESTURES)),
-            parse("""{"type":"touch-start","doc_top":0,"inner_top":0,"owner":"gestures"}"""),
+            BridgeMessage.TouchStart("0123456789abcdef", 3, Probe(0, 0, Owner.GESTURES, editing = false)),
+            parse("""{"type":"touch-start","doc":"0123456789abcdef","seq":3,"doc_top":0,"inner_top":0,"owner":"gestures","editing":false}"""),
         )
     }
 
     @Test
     fun touchStartFromAnotherFrameOrOriginIsRefused() {
-        val msg = """{"type":"touch-start","doc_top":0,"inner_top":null,"owner":"page"}"""
+        val msg = """{"type":"touch-start","doc":"k3","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false}"""
+        assertTrue(parse(msg) is BridgeMessage.TouchStart) // control
         assertTrue(parse(msg, main = false) is BridgeMessage.Refused)
         assertTrue(parse(msg, src = "https://m.example.test") is BridgeMessage.Refused)
         assertTrue(parse(msg, src = "https://evil.example.test:8443") is BridgeMessage.Refused)
@@ -82,16 +83,34 @@ class PullProbeTest {
 
     @Test
     fun malformedTouchStartIsRefused() {
+        val ok = """"doc":"k3","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false"""
+        assertTrue("control", parse("""{"type":"touch-start",$ok}""") is BridgeMessage.TouchStart)
         for (m in listOf(
-            """{"type":"touch-start","inner_top":null,"owner":"page"}""",
-            """{"type":"touch-start","doc_top":"0","inner_top":null,"owner":"page"}""",
-            """{"type":"touch-start","doc_top":0.5,"inner_top":null,"owner":"page"}""",
-            """{"type":"touch-start","doc_top":0,"inner_top":"0","owner":"page"}""",
-            """{"type":"touch-start","doc_top":0,"inner_top":null,"owner":"refresh"}""",
-            """{"type":"touch-start","doc_top":0,"inner_top":null}""",
-            """{"type":"touch-start","doc_top":true,"inner_top":null,"owner":"page"}""",
+            ok.replace(""""doc_top":0,""", ""),
+            ok.replace(""""doc_top":0""", """"doc_top":"0""""),
+            ok.replace(""""doc_top":0""", """"doc_top":0.5"""),
+            ok.replace(""""doc_top":0""", """"doc_top":true"""),
+            ok.replace(""""inner_top":null""", """"inner_top":"0""""),
+            ok.replace(""""owner":"page"""", """"owner":"refresh""""),
+            ok.replace(""","owner":"page"""", ""),
+            // The gesture's identity: a document id and a count from 1.
+            ok.replace(""""doc":"k3",""", ""),
+            ok.replace(""""doc":"k3"""", """"doc":"K3""""),
+            ok.replace(""""doc":"k3"""", """"doc":"""""),
+            ok.replace(""""doc":"k3"""", """"doc":"0123456789abcdefg""""),
+            ok.replace(""""doc":"k3"""", """"doc":3"""),
+            ok.replace(""""seq":1,""", ""),
+            ok.replace(""""seq":1""", """"seq":0"""),
+            ok.replace(""""seq":1""", """"seq":-1"""),
+            ok.replace(""""seq":1""", """"seq":"1""""),
+            ok.replace(""""seq":1""", """"seq":1.5"""),
+            // editing: a JSON boolean, always sent.
+            ok.replace(""","editing":false""", ""),
+            ok.replace(""""editing":false""", """"editing":"false""""),
+            ok.replace(""""editing":false""", """"editing":0"""),
+            ok.replace(""""editing":false""", """"editing":null"""),
         )) {
-            assertTrue(m, parse(m) is BridgeMessage.Refused)
+            assertTrue(m, parse("""{"type":"touch-start",$m}""") is BridgeMessage.Refused)
         }
     }
 }
