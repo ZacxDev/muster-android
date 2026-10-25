@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import androidx.work.Configuration
 import dev.zacx.muster.core.auth.AesGcmAead
 import dev.zacx.muster.core.auth.DataStoreDeviceStore
 import dev.zacx.muster.core.auth.DeviceStore
@@ -22,7 +23,14 @@ import kotlinx.coroutines.SupervisorJob
 import java.io.File
 
 /** Wires the modules together. One instance of each store per process. */
-class MusterApp : Application() {
+class MusterApp : Application(), Configuration.Provider {
+    /**
+     * WorkManager starts on first use, not at every process start (its
+     * App Startup initializer is removed in the manifest): a cold start of
+     * the shell must not pay for it.
+     */
+    override val workManagerConfiguration: Configuration get() = Configuration.Builder().build()
+
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     val store: DeviceStore by lazy {
@@ -41,8 +49,10 @@ class MusterApp : Application() {
     fun pairing(origin: String) = Pairing(DeviceApi(origin), keys, store)
 
     override fun onCreate() {
+        StartupProbe.mark("app.onCreate.start")
         super.onCreate()
         Channels.ensure(this)
+        StartupProbe.mark("app.onCreate.end")
     }
 
     private fun tapIntent(tag: String, path: String?): PendingIntent = tapPendingIntent(this, tag, path)

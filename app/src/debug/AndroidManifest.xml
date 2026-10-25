@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- DEBUG BUILDS ONLY: lets adb run the background-refresh worker now
+     (WorkManager will not run a periodic job before its period is up):
+     adb shell am broadcast -n dev.zacx.muster/.RunRefreshReceiver -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".RunRefreshReceiver"
+            android:exported="true" />
+    </application>
+</manifest>

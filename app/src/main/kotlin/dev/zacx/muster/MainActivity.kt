@@ -4,13 +4,21 @@ import android.Manifest
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
+import android.view.PixelCopy
+import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.webkit.WebView
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -21,7 +29,11 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.createBitmap
 import androidx.lifecycle.lifecycleScope
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import androidx.work.WorkManager
 import dev.zacx.muster.core.auth.DeviceRecord
 import dev.zacx.muster.core.auth.Pairing
 import dev.zacx.muster.core.auth.PushStatus
@@ -34,13 +46,18 @@ import dev.zacx.muster.feature.shell.ShellBack
 import dev.zacx.muster.feature.shell.ShellNavigation
 import dev.zacx.muster.feature.shell.ShellWebView
 import dev.zacx.muster.push.MusterPushService
+import dev.zacx.muster.refresh.RefreshSchedule
+import dev.zacx.muster.refresh.scheduleBackgroundRefresh
+import dev.zacx.muster.shell.ShellSnapshot
+import dev.zacx.muster.shell.SnapshotPolicy
 import dev.zacx.muster.ui.PhoneSettingsScreen
 import dev.zacx.muster.ui.ServerUrlScreen
 import dev.zacx.muster.ui.StatusBanner
+import java.time.Instant
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.time.Instant
 import org.unifiedpush.android.connector.UnifiedPush
 
 /**
@@ -51,6 +68,18 @@ class MainActivity : ComponentActivity() {
     private val app get() = MusterApp.from(this)
     private var webView: WebView? = null
     private var policy: OriginPolicy? = null
+    private var reportedDrawn = false
+
+    /** The last home-page frame (ShellSnapshot), on screen until the live page paints. */
+    private val snapshot by lazy { ShellSnapshot(noBackupFilesDir) }
+    private var overlay: View? = null
+
+    /** The shell's current load was the launcher's home page: its first commit decides the snapshot's fate. */
+    private var homeLoadPending = false
+    private var refreshScheduled = false
+
+    /** Bumped by every showShell: a WebView attach posted for an older shell does nothing. */
+    private var shellGeneration = 0
 
     /** The ONE back callback, registered once in onCreate (ShellBack). */
     private val back = ShellBack { webView }
@@ -74,6 +103,7 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* the status screen shows the state */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        StartupProbe.mark("activity.onCreate")
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         onBackPressedDispatcher.addCallback(this, back)
@@ -87,16 +117,25 @@ class MainActivity : ComponentActivity() {
     }
 
     private suspend fun route(intent: Intent) {
+        // A plain launch opens the home page: read its last frame while the
+        // device record is read (both are disk; neither waits for the other).
+        val launchesHome = intent.action != ACTION_SETTINGS && intent.getStringExtra(EXTRA_PATH) == null && webView == null
+        val stored = if (launchesHome) lifecycleScope.async(Dispatchers.IO) { runCatching { snapshot.read(hardware = true) }.getOrNull() } else null
         val record = app.store.read()
+        StartupProbe.mark("store.read")
         val origin = record.origin
+        val picture = stored?.await()?.takeIf { origin != null && SnapshotPolicy.showable(it.meta, snapshotMeta(origin)) }
         when {
             intent.action == ACTION_SETTINGS -> showSettings()
             origin == null -> showServerUrl()
             // The activity is exported (it is the launcher), so the path is
             // re-checked: a muster path only, and tapTarget refuses attachments.
-            else -> showShell(origin, MusterPath.parse(intent.getStringExtra(EXTRA_PATH)), record)
+            else -> showShell(origin, MusterPath.parse(intent.getStringExtra(EXTRA_PATH)), record, picture?.bitmap)
         }
     }
+
+    private fun snapshotMeta(origin: String) =
+        ShellSnapshot.Meta(origin, resources.configuration.orientation, resources.configuration.screenWidthDp)
 
     // --- first run --------------------------------------------------------------------
 
@@ -118,7 +157,7 @@ class MainActivity : ComponentActivity() {
 
     // --- the shell --------------------------------------------------------------------
 
-    private fun showShell(origin: String, path: String?, record: DeviceRecord) {
+    private fun showShell(origin: String, path: String?, record: DeviceRecord, picture: Bitmap? = null) {
         val p = OriginPolicy.forServer(origin) ?: return showServerUrl()
         val target = ShellNavigation.tapTarget(path, p)
         val existing = webView
@@ -127,8 +166,7 @@ class MainActivity : ComponentActivity() {
             return
         }
         policy = p
-        val wv = WebView(this)
-        ShellWebView.configure(wv, p, shellCallbacks(p))
+        val shell = ++shellGeneration
         val banner = ComposeView(this).apply {
             setContent {
                 MaterialTheme {
@@ -136,15 +174,51 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        val page = FrameLayout(this)
+        homeLoadPending = path == null
+        overlay = if (picture != null && path == null) snapshotOverlay(picture).also {
+            page.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        } else null
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setBackgroundColor(SHELL_BACKGROUND)
             addView(banner, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-            addView(wv, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(page, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
         ShellWebView.padForInsets(root)
         setContentView(root)
+        val attach = {
+            // A newer shell (or none) replaced this one before it got its WebView.
+            if (shell == shellGeneration && policy === p) attachWebView(page, p, target, record)
+        }
+        if (overlay != null) {
+            // The picture reaches the screen first: constructing the WebView
+            // (Chromium start-up, ~130 ms on the emulator) blocks this thread,
+            // and a posted task runs only after the frame setContentView
+            // scheduled has been laid out and drawn.
+            page.post {
+                StartupProbe.mark("shell.placeholder") // its frame has been laid out and drawn
+                attach()
+            }
+        } else {
+            attach()
+        }
+    }
+
+    /** The shell's WebView, under the picture if there is one, then the load. */
+    private fun attachWebView(page: FrameLayout, p: OriginPolicy, target: String, record: DeviceRecord) {
+        StartupProbe.mark("webview.new.start")
+        val wv = WebView(this)
+        StartupProbe.mark("webview.new.end")
+        // muster's own background (its dark theme-color), not the WebView's
+        // white, until the page paints.
+        wv.setBackgroundColor(SHELL_BACKGROUND)
+        ShellWebView.configure(wv, p, shellCallbacks(p))
+        StartupProbe.attach(wv, p.allowedOriginRule)
+        page.addView(wv, 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         webView = wv
         back.sync()
+        StartupProbe.mark("webview.loadUrl")
         wv.loadUrl(target)
         if (record.paired) refreshPush(registerIfNeeded = record.pushStatus != PushStatus.REGISTERED)
     }
@@ -202,6 +276,17 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        override fun onPageEvent(view: WebView, event: ShellWebView.PageEvent, url: String) {
+            StartupProbe.page(view, event, url)
+            if (event != ShellWebView.PageEvent.STARTED && view === webView) onFirstPaint(view, url)
+            // The first muster page on screen is "fully drawn" for the system's
+            // startup metrics (logcat "Fully drawn", am start -W); once per activity.
+            if (event == ShellWebView.PageEvent.COMMIT_VISIBLE && !reportedDrawn) {
+                reportedDrawn = true
+                reportFullyDrawn()
+            }
+        }
+
         override fun onHistoryChanged() {
             runOnUiThread { back.sync() }
         }
@@ -211,6 +296,76 @@ class MainActivity : ComponentActivity() {
                 Toast.makeText(this@MainActivity, R.string.attachment_blocked, Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    // --- the snapshot (ShellSnapshot) --------------------------------------------------
+
+    /** The last frame, drawn 1:1 from the top left (same width: SnapshotPolicy.showable), swallowing touches. */
+    private fun snapshotOverlay(picture: Bitmap) = ImageView(this).apply {
+        setImageBitmap(picture)
+        scaleType = ImageView.ScaleType.MATRIX
+        setBackgroundColor(SHELL_BACKGROUND)
+        isClickable = true // a tap must not reach the live page under a stale picture
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    /** A page of the shell committed ([url]): settle the snapshot, then take the picture away once the page has painted. */
+    private fun onFirstPaint(view: WebView, url: String) {
+        val p = policy ?: return
+        // Signed out (or the session expired): the stored board is no longer this user's to see.
+        if (SnapshotPolicy.isSignIn(url, p.allowedOriginRule)) lifecycleScope.launch(snapshotIo) { snapshot.delete() }
+        if (homeLoadPending) {
+            homeLoadPending = false
+            // The home page landed elsewhere (signed out: the sign-in page): its picture is wrong now.
+            if (!SnapshotPolicy.isHome(url, p.allowedOriginRule)) lifecycleScope.launch(snapshotIo) { snapshot.delete() }
+        }
+        if (!refreshScheduled) {
+            // Off the start-up path: after the first commit, on a background thread.
+            refreshScheduled = true
+            app.scope.launch { scheduleBackgroundRefresh(applicationContext) }
+        }
+        val o = overlay ?: return
+        overlay = null
+        val drop = { (o.parent as? ViewGroup)?.removeView(o); StartupProbe.mark("shell.placeholder.gone") }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.VISUAL_STATE_CALLBACK)) {
+            // Fires once the frame holding this commit is on screen: no blank frame between picture and page.
+            WebViewCompat.postVisualStateCallback(view, 0L) { runOnUiThread { drop() } }
+        } else {
+            drop()
+        }
+    }
+
+    /** Leaving the foreground on the home page: keep its last frame for the next launch. */
+    private fun captureSnapshot() {
+        val wv = webView ?: return
+        val p = policy ?: return
+        if (overlay != null || wv.width == 0 || wv.height == 0) return // the live page has not painted yet
+        if (!SnapshotPolicy.isHome(wv.url, p.allowedOriginRule)) return
+        val meta = snapshotMeta(p.allowedOriginRule)
+        val loc = IntArray(2).also(wv::getLocationInWindow)
+        val bmp = runCatching { createBitmap(wv.width, wv.height) }.getOrNull() ?: return
+        val done = PixelCopy.OnPixelCopyFinishedListener { r ->
+            if (r != PixelCopy.SUCCESS) { bmp.recycle(); return@OnPixelCopyFinishedListener }
+            app.scope.launch(snapshotIo) {
+                runCatching { snapshot.save(bmp, meta) }
+                bmp.recycle()
+            }
+        }
+        runCatching {
+            PixelCopy.request(window, Rect(loc[0], loc[1], loc[0] + wv.width, loc[1] + wv.height), bmp, done, Handler(Looper.getMainLooper()))
+        }.onFailure { bmp.recycle() }
+    }
+
+    override fun onPause() {
+        captureSnapshot()
+        // Write the WebView's cookies to disk now. Chromium otherwise flushes
+        // them on its own timer, and a process killed before that (a swipe
+        // from Recents, a force-stop) reopens with the session it had before:
+        // signed out again after a sign-in, or signed in again after a
+        // sign-out (both seen on the emulator, a few seconds after signing).
+        // Native code still never reads them.
+        CookieManager.getInstance().flush()
+        super.onPause()
     }
 
     // --- pairing ----------------------------------------------------------------------
@@ -336,6 +491,8 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             if (app.store.read().paired) return@launch
             CookieManager.getInstance().removeAllCookies(null)
+            withContext(snapshotIo) { snapshot.delete() }
+            runCatching { RefreshSchedule.cancel(WorkManager.getInstance(applicationContext)) }
             app.store.update { DeviceRecord() }
             startActivity(Intent(this@MainActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK))
         }
@@ -357,6 +514,9 @@ class MainActivity : ComponentActivity() {
 
     /** Detaches and DESTROYS the shell's WebView (its renderer, its page), and re-syncs back. */
     private fun dropWebView() {
+        shellGeneration++
+        overlay = null
+        homeLoadPending = false
         webView?.let { v ->
             (v.parent as? ViewGroup)?.removeView(v)
             v.destroy()
@@ -369,5 +529,12 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val ACTION_SETTINGS = "dev.zacx.muster.SETTINGS"
         const val EXTRA_PATH = "path"
+
+        /** muster's dark theme-color (web: `<meta name="theme-color">`), the launcher icon's tile too. */
+        const val SHELL_BACKGROUND = 0xFF110F1C.toInt()
+
+        /** One writer at a time for the snapshot's two files. */
+        @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+        private val snapshotIo = Dispatchers.IO.limitedParallelism(1)
     }
 }

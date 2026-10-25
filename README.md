@@ -57,6 +57,24 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   tag. POST_NOTIFICATIONS is asked for right after pairing.
 - **Phone settings** (long-press the launcher icon): pairing, step-up key,
   push state, unpair.
+- **Opening (0.1.2):** the launcher shows the home page's last frame (a
+  JPEG kept in `noBackupFilesDir`, home page and same server only, deleted
+  when the home page lands on sign-in or the server changes) until the live
+  page paints over it; it swallows taps meanwhile. The WebView's background
+  is muster's dark background, not white. Leaving the app flushes the
+  WebView's cookies to disk, so a sign-in survives the process being killed
+  right after it.
+- **Background refresh (0.1.2):** a WorkManager job every 15 minutes (network
+  connected, battery not low) reads `/api/device/config` with the device
+  credential, so a pairing muster ended is dropped, and starts Chromium in
+  that process, so an open while Android still keeps the process is a warm
+  start. A shown push starts Chromium too. Nothing renders or fetches muster
+  pages in the background: the pages need the session cookie, which stays in
+  the WebView.
+- **Startup timing (debug builds):** `adb logcat -s MusterStartup` logs each
+  cold-start phase in ms since the process started, and the page's
+  Navigation and Paint Timing. Every build reports "Fully drawn" when the
+  first muster page is on screen.
 
 ### 🔴 Uploaded files are not rendered
 
