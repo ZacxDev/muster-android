@@ -127,14 +127,24 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   Navigation and Paint Timing. Every build reports "Fully drawn" when the
   first muster page is on screen.
 
-### 🔴 Uploaded files are not rendered
+### 🔴 Uploaded files
 
 muster serves uploaded bytes on its own origin, which is where the bridge
-answers. Until muster's sandbox for them (muster #207) is confirmed deployed,
-the shell refuses every route that serves them, `/tasks/{id}/attachments/…`,
-`/uploads/{id}/file` and `/f/{id}`, as a page and as a subresource (so upload
-thumbnails do not render either), and a notification never opens one
-(`AttachmentGate.SANDBOX_CONFIRMED`, a compile-time switch, off).
+answers. muster #207 serves them sandboxed (`Content-Security-Policy: …
+sandbox`, `nosniff`, and every non-image as a download), so the shell loads
+`/tasks/{id}/attachments/…`, `/uploads/{id}/file` and `/f/{id}`
+(`AttachmentGate.SANDBOX_CONFIRMED`, a compile-time switch, **on**). 🔴 That
+holds only for a muster at #207 or later; with the switch off, the shell
+refuses those routes everywhere, thumbnails included. Either way, a
+notification tap or a launch path never opens one.
+
+🔴 With the switch on, the app trusts muster's headers and does not check
+them (no app-side check is robust: a page can `pushState` to any URL). A
+muster older than #207, or a regression in its sandbox headers, would let an
+uploaded HTML file's script run on muster's origin with everything the app
+grants that origin: the bridge (a `pair` for someone else's account) and the
+microphone, which the app grants muster's page without a prompt once it holds
+`RECORD_AUDIO`.
 
 A download (a response served as `Content-Disposition: attachment`) is handed
 to the browser in a Custom Tab with its URL only: no cookie, no credential.

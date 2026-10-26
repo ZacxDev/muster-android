@@ -23,8 +23,9 @@ import java.time.Instant
  * - no file or content access, no `addJavascriptInterface`;
  * - the bridge is `WebViewCompat.addWebMessageListener` named `musterApp`,
  *   restricted to the exact origin (never `*`), main frame only;
- * - uploaded files are refused at the top level and as subresources until
- *   muster's sandbox is confirmed (AttachmentGate);
+ * - uploaded files load like any muster page while AttachmentGate is open
+ *   (as shipped, resting on muster's sandbox headers); with it closed they are
+ *   refused at the top level and as subresources;
  * - a download is handed to the browser, URL only ([DownloadHandoff]);
  * - WebAuthn (passkeys) is on, as this app, where the WebView has it ([WebAuthn]);
  * - pull to refresh asks the page what is under the finger ([PullProbeScript],

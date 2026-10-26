@@ -30,8 +30,8 @@ class PushHandler(private val sink: NotificationSink) {
             Push.Probe -> Outcome.PROBE
             is Push.Withdraw -> { sink.withdraw(p.tag); Outcome.WITHDRAWN }
             is Push.Show -> {
-                // A tap never opens a note attachment (AttachmentGate).
-                val payload = p.payload.path?.let { if (AttachmentGate.blocks(it)) p.payload.copy(path = null) else null }
+                // A tap never opens an upload, gate open or closed (AttachmentGate.isUploadRoute).
+                val payload = p.payload.path?.let { if (AttachmentGate.isUploadRoute(it)) p.payload.copy(path = null) else null }
                     ?: p.payload
                 sink.show(payload)
                 Outcome.SHOWN

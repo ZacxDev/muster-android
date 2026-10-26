@@ -134,7 +134,8 @@ class MainActivity : ComponentActivity() {
             intent.action == ACTION_SETTINGS -> showSettings()
             origin == null -> showServerUrl()
             // The activity is exported (it is the launcher), so the path is
-            // re-checked: a muster path only, and tapTarget refuses attachments.
+            // re-checked: a muster path only, and tapTarget refuses upload
+            // routes whatever AttachmentGate says.
             else -> showShell(origin, MusterPath.parse(intent.getStringExtra(EXTRA_PATH)), record, picture?.bitmap)
         }
     }

@@ -185,6 +185,6 @@ Phone settings says why, and **Register push again** retries.
 ## Known limits of Phase 1
 
 - No action buttons on notifications, no inline reply (Phase 2).
-- Uploaded files do not open in the app (`AttachmentGate`), and upload
-  thumbnails do not render.
+- Uploaded files: images show in the app; every other file is handed to your
+  browser as a download, which may ask you to sign in to muster there.
 - No in-app updates.
