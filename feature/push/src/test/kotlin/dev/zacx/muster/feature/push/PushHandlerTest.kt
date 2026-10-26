@@ -49,19 +49,21 @@ class PushHandlerTest {
         assertTrue(sink.shown.isEmpty())
     }
 
-    /** With the gate closed a notification never opens an attachment: the tap target is dropped. */
+    /**
+     * A notification never opens an upload, gate open or closed: muster never
+     * sends one, and a notification never needs raw bytes. The tap target is
+     * dropped (the tap opens the home page); the notification is still shown.
+     */
     @Test
-    fun anAttachmentTapTargetIsDroppedWhileTheGateIsClosed() {
-        val p = """{"v":2,"type":"comment","tag":"c","title":"x","url":"/tasks/4/attachments/2"}""".encodeToByteArray()
-        assertEquals(Outcome.SHOWN, PushHandler(sink, sandboxConfirmed = false).handle(p, true, true))
-        assertEquals(null, sink.shown.single().path)
-    }
-
-    /** As shipped (the gate open): an attachment tap target is kept. */
-    @Test
-    fun anAttachmentTapTargetIsKeptAsShipped() {
-        val p = """{"v":2,"type":"comment","tag":"c","title":"x","url":"/tasks/4/attachments/2"}""".encodeToByteArray()
-        assertEquals(Outcome.SHOWN, handler.handle(p, true, true))
-        assertEquals("/tasks/4/attachments/2", sink.shown.single().path)
+    fun anUploadTapTargetIsDropped() {
+        listOf("/tasks/4/attachments/2", "/uploads/abc/file", "/f/abc").forEach { path ->
+            val p = """{"v":2,"type":"comment","tag":"c","title":"x","url":"$path"}""".encodeToByteArray()
+            val s = RecordingSink()
+            assertEquals(path, Outcome.SHOWN, PushHandler(s).handle(p, true, true))
+            assertEquals(path, null, s.shown.single().path)
+        }
+        // Control: an ordinary path is kept.
+        assertEquals(Outcome.SHOWN, handler.handle(show, true, true))
+        assertEquals("/attention", sink.shown.single().path)
     }
 }

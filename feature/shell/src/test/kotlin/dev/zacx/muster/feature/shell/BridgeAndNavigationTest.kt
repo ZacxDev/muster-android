@@ -73,8 +73,22 @@ class BridgeAndNavigationTest {
             val u = "https://m.example.test$p"
             assertEquals(u, Verdict.WEBVIEW, ShellNavigation.decide(u, policy))
             assertFalse(u, ShellNavigation.blocksSubresource(u, policy))
-            assertEquals(u, ShellNavigation.tapTarget(p, policy))
         }
+    }
+
+    /**
+     * 🔴 An upload route is never a tap target, gate open or closed: the
+     * launcher activity is exported, so any app can hand it a path, and a
+     * notification never needs raw bytes. It opens the home page instead.
+     */
+    @Test
+    fun uploadRoutesAreNeverTapTargets() {
+        listOf("/tasks/42/attachments/7", "/uploads/abc/file", "/f/abc", "/Tasks/42/Attachments/7", "/x/../f/abc").forEach { p ->
+            assertEquals(p, "https://m.example.test/", ShellNavigation.tapTarget(p, policy))
+            assertEquals(p, "https://m.example.test/", ShellNavigation.tapTarget(p, policy, sandboxConfirmed = false))
+        }
+        // Control: an ordinary muster path is still a tap target with the gate open.
+        assertEquals("https://m.example.test/tasks/42", ShellNavigation.tapTarget("/tasks/42", policy))
     }
 
     @Test

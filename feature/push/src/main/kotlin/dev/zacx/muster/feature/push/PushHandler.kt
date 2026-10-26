@@ -17,10 +17,7 @@ import dev.zacx.muster.core.model.PayloadV2Parser
  * only this phone and muster hold. An undecrypted message is dropped BEFORE
  * it is parsed: it draws nothing, withdraws nothing and changes no state.
  */
-class PushHandler(
-    private val sink: NotificationSink,
-    private val sandboxConfirmed: Boolean = AttachmentGate.SANDBOX_CONFIRMED,
-) {
+class PushHandler(private val sink: NotificationSink) {
 
     enum class Outcome { DROPPED_UNDECRYPTED, DROPPED_UNPAIRED, REJECTED, PROBE, SHOWN, WITHDRAWN }
 
@@ -33,8 +30,8 @@ class PushHandler(
             Push.Probe -> Outcome.PROBE
             is Push.Withdraw -> { sink.withdraw(p.tag); Outcome.WITHDRAWN }
             is Push.Show -> {
-                // While the gate is closed a tap never opens an upload (AttachmentGate).
-                val payload = p.payload.path?.let { if (AttachmentGate.blocks(it, sandboxConfirmed)) p.payload.copy(path = null) else null }
+                // A tap never opens an upload, gate open or closed (AttachmentGate.isUploadRoute).
+                val payload = p.payload.path?.let { if (AttachmentGate.isUploadRoute(it)) p.payload.copy(path = null) else null }
                     ?: p.payload
                 sink.show(payload)
                 Outcome.SHOWN
