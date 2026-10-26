@@ -65,8 +65,12 @@ object PushHostCheck {
 class PushRegistrar(
     private val store: DeviceStore,
     private val api: (origin: String) -> DeviceApi,
-    /** Runs with the forgotten record when muster has ended the pairing: deletes its step-up key. */
-    private val onForget: (DeviceRecord) -> Unit = {},
+    /**
+     * Runs with the forgotten record when muster has ended the pairing, before
+     * the call that noticed returns: the app deletes its step-up key, the shell's
+     * last-frame picture and the background job.
+     */
+    private val onForget: suspend (DeviceRecord) -> Unit = {},
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) {
     sealed interface ConfigResult {

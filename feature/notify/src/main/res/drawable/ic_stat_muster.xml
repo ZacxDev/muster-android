@@ -1,11 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- A plain "m" mark for the status bar (monochrome, as status icons must be). -->
+<!-- The status-bar icon: muster's monochrome notification badge, the one the
+     PWA shows (muster web/icon-src/badge.svg, viewBox 192), with each check
+     cut out of its disc (evenOdd). White on transparent: Android uses the
+     alpha only. Shifted to centre the glyph (centre 102.5, 95) in the box. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="24dp"
     android:height="24dp"
-    android:viewportWidth="24"
-    android:viewportHeight="24">
-    <path
-        android:fillColor="#FFFFFFFF"
-        android:pathData="M4,19V7h2.5v1.4C7.2,7.5 8.2,7 9.4,7c1.3,0 2.3,0.6 2.8,1.6C12.9,7.6 14,7 15.3,7C17.9,7 20,8.6 20,11.6V19h-2.6v-7c0,-1.5 -0.8,-2.5 -2.2,-2.5c-1.4,0 -2.3,1 -2.3,2.5v7h-2.6v-7c0,-1.5 -0.8,-2.5 -2.2,-2.5C6.7,9.5 6.6,10.5 6.6,12v7z" />
+    android:viewportWidth="192"
+    android:viewportHeight="192">
+    <group
+        android:translateX="-6.5"
+        android:translateY="1">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M29,48a26,26 0 1,0 52,0a26,26 0 1,0 -52,0ZM38.82,50.68L47.82,59.68A4.5,4.5 0 0,0 54.27,59.59L71.27,41.59A4.5,4.5 0 0,0 64.73,35.41L50.91,50.04L45.18,44.32A4.5,4.5 0 0,0 38.82,50.68Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M29,98a26,26 0 1,0 52,0a26,26 0 1,0 -52,0ZM38.82,100.68L47.82,109.68A4.5,4.5 0 0,0 54.27,109.59L71.27,91.59A4.5,4.5 0 0,0 64.73,85.41L50.91,100.04L45.18,94.32A4.5,4.5 0 0,0 38.82,100.68Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:fillType="evenOdd"
+            android:pathData="M30,148a25,25 0 1,0 50,0a25,25 0 1,0 -50,0ZM40,148a15,15 0 1,0 30,0a15,15 0 1,0 -30,0Z" />
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M106,38h60a10,10 0 0,1 0,20h-60a10,10 0 0,1 0,-20ZM106,88h44a10,10 0 0,1 0,20h-44a10,10 0 0,1 0,-20ZM106,138h28a10,10 0 0,1 0,20h-28a10,10 0 0,1 0,-20Z" />
+    </group>
 </vector>

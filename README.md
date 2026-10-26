@@ -24,13 +24,56 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   `addJavascriptInterface`) with password sign-in on muster's own page. The
   native container pads for the system bars, cutout and keyboard, because CSS
   `env(safe-area-inset-*)` reads 0 in a WebView (Phase 0, S12).
+- **Passkeys:** the WebView runs WebAuthn as this app
+  (`WEB_AUTHENTICATION_SUPPORT_FOR_APP`, where the WebView has the feature),
+  so muster's passkey sign-in and its "Confirm it's you" passkey work in the
+  shell. Android uses a passkey only if the server lists this package and the
+  signing certificate in `/.well-known/assetlinks.json`, and the server's
+  WebAuthn backend must accept the app's origin,
+  `android:apk-key-hash:<unpadded base64url SHA-256 of the signing cert>`.
+  For the release certificate below that is
+  `android:apk-key-hash:9mAiKkY2M_bmWoehcB2eyGI2S6Rkno4J00uBca0g9eY`. A
+  debug-signed build has a different certificate, and so a different origin:
+  it cannot use passkeys against production. AGP's debug key is a throwaway
+  generated per machine (per CI runner), so 🔴 never add a debug key's hash to
+  production's `assetlinks.json` or `GOTRUE_WEBAUTHN_RP_ORIGINS`.
+  Passkey autofill (conditional mediation) does not work in a WebView.
 - **In the shell:** back follows the WebView's history; `<input type=file>`
   opens the system picker and hands the page `content://` URIs only; muster's
   `alert`/`confirm` are native dialogs. A URL the shell cannot parse is
   refused, never waved through.
+- **The microphone (dictation):** the page gets audio capture only when the
+  request comes from exactly the muster origin and asks for audio alone;
+  camera, MIDI, protected media and every other origin are denied. The app
+  asks Android for RECORD_AUDIO the first time the page wants it. When
+  Android answers "no" without a rationale after an earlier ask (it showed no
+  prompt after "Don't allow", or the user dismissed its prompt twice; the app
+  cannot tell which), a dialog says the microphone isn't allowed and offers
+  the app's settings page instead of a silent refusal.
 - **The bridge:** `musterApp`, a `WebViewCompat.addWebMessageListener`
   restricted to the exact origin, main frame only. It understands the two
-  messages muster sends: `pair` and `open-notification-settings`.
+  messages muster sends, `pair` and `open-notification-settings`, and
+  `touch-start`, which the app's own pull-to-refresh script sends (below).
+- **Pull to refresh:** pulling down at the top of a page reloads it, with a
+  spinner in muster's colours until the page finishes (15 s at most). A pull
+  refreshes only when nothing under the finger can still scroll up. The
+  WebView's own scroll position cannot tell: muster's agent page scrolls its
+  chat log inside a document that does not scroll. So a document-start script
+  (`WebViewCompat.addDocumentStartJavaScript`, the exact origin only, main
+  frame only) reports at each `touchstart` how far the document and the
+  scrollers under the finger are scrolled, and whether the finger is on an
+  overlay (a sheet, a dialog, the open sidebar) or on something that takes its
+  own drags, and whether a non-empty text field has focus:
+  `{"type":"touch-start","doc":"k3x9q2","seq":3,"doc_top":0,"inner_top":null,"owner":"page","editing":false}`.
+  `doc` and `seq` name the gesture (a random id per document, and its count
+  of gestures); the app counts DOWNs the same way and uses a report only for
+  the gesture it describes, so a late one never decides the next pull. It
+  carries scroll offsets, that count and the `editing` boolean only: no text,
+  nothing typed, no URL, and nothing goes back to the page. A pull never
+  reloads while a text field (input, textarea, contenteditable) has text in
+  it. A sideways swipe (a chip row), a second finger, the terminal and a
+  mirrored session (their path segments decoded first) never refresh. A
+  WebView without document-start scripts never refreshes.
 - **Pairing:** Account → Devices → **Pair this phone** hands the app a
   one-time code; the app asks you to confirm, re-checks the code's expiry,
   makes the step-up key, and redeems the code at `POST /api/device/pair`.
@@ -57,6 +100,32 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   tag. POST_NOTIFICATIONS is asked for right after pairing.
 - **Phone settings** (long-press the launcher icon): pairing, step-up key,
   push state, unpair.
+- **Opening (0.1.2):** the launcher shows the home page's last frame until
+  the live page paints over it. The frame is a JPEG of the board, so it is a
+  new copy of board text at rest: app-private, in `noBackupFilesDir` (never
+  backed up), never shown on the lock screen, home page and same server only.
+  It is deleted when any page lands on sign-in, when the home load lands
+  elsewhere, on unpair, when muster ends the pairing, on change server, and
+  when it is more than 24 hours old. While it is up it swallows taps and shows
+  a loading bar; it goes when the page has painted, on any page finish or
+  main-frame error, and after 5 seconds whatever happens. The WebView's
+  background is muster's dark background, not white. Leaving the app flushes
+  the WebView's cookies to disk, so a sign-in survives the process being
+  killed right after it.
+- **Background refresh (0.1.2), paired phones only:** a WorkManager job every
+  15 minutes (network connected, battery not low) reads `/api/device/config`
+  with the device credential, so a pairing muster ended is dropped, and
+  starts Chromium in that process, so an open while Android still keeps the
+  process is a warm start. It is scheduled only once the phone is paired, and
+  cancelled on unpair, on revocation and on change server; a run that finds
+  the phone unpaired cancels it and starts no Chromium. A shown push starts
+  Chromium too. Nothing renders or fetches muster pages in the background:
+  the pages need the session cookie, which stays in the WebView. Its battery
+  and memory cost on a real phone has not been measured.
+- **Startup timing (debug builds):** `adb logcat -s MusterStartup` logs each
+  cold-start phase in ms since the process started, and the page's
+  Navigation and Paint Timing. Every build reports "Fully drawn" when the
+  first muster page is on screen.
 
 ### 🔴 Uploaded files
 
@@ -95,7 +164,7 @@ release has been published.
 | `core/model` | pure Kotlin: payload v2 and its parser, the action-id table, the action policy, the attachment gate |
 | `core/net` | pure Kotlin: the `/api/device/...` client (OkHttp, no redirects) |
 | `core/auth` | pairing, the step-up key and its policy, the sealed credential store |
-| `feature/shell` | the WebView: origin policy, navigation, bridge, insets |
+| `feature/shell` | the WebView: origin policy, navigation, bridge, insets, pull to refresh |
 | `feature/push` | the push handler (decrypted-only), the push-host check, registration |
 | `feature/notify` | channels and drawing notifications |
 | `feature/stepup` | the invisible step-up activity (Phase 2; a stub) |

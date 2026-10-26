@@ -25,7 +25,10 @@ import java.time.Instant
  *   restricted to the exact origin (never `*`), main frame only;
  * - uploaded files are refused at the top level and as subresources until
  *   muster's sandbox is confirmed (AttachmentGate);
- * - a download is handed to the browser, URL only ([DownloadHandoff]).
+ * - a download is handed to the browser, URL only ([DownloadHandoff]);
+ * - WebAuthn (passkeys) is on, as this app, where the WebView has it ([WebAuthn]);
+ * - pull to refresh asks the page what is under the finger ([PullProbeScript],
+ *   [ShellRefreshLayout]).
  */
 object ShellWebView {
     /**
@@ -57,15 +60,41 @@ object ShellWebView {
         /** A JS alert ([confirm] false) or confirm from muster: show it natively, then call [done] once. */
         fun jsDialog(message: String, confirm: Boolean, done: (Boolean) -> Unit)
 
+        /**
+         * muster's page asked for the microphone: make sure the app holds
+         * RECORD_AUDIO (asking Android if not) and call [done] once with
+         * whether it does. The default refuses.
+         */
+        fun requestMicrophone(done: (Boolean) -> Unit) = done(false)
+
         /** The WebView's history changed: re-sync back handling ([ShellBack.sync]). */
         fun onHistoryChanged()
 
         /** The renderer crashed or was killed: drop this WebView and make a new one. */
         fun onRendererGone(view: WebView)
+
+        /**
+         * A main-frame load milestone ([PageEvent]). The app's debug startup
+         * probe and `reportFullyDrawn` listen, and the app takes its
+         * last-frame picture away on it; nothing here may change what loads.
+         */
+        fun onPageEvent(view: WebView, event: PageEvent, url: String) {}
     }
 
+    /**
+     * Main-frame load milestones, in the order the WebView reports them;
+     * [ERROR] is a main-frame load that failed (no network, a TLS or DNS
+     * error), reported as it happens.
+     */
+    enum class PageEvent { STARTED, COMMIT_VISIBLE, FINISHED, ERROR }
+
     @SuppressLint("SetJavaScriptEnabled")
-    fun configure(webView: WebView, policy: OriginPolicy, callbacks: Callbacks) {
+    fun configure(
+        webView: WebView,
+        policy: OriginPolicy,
+        callbacks: Callbacks,
+        enableWebAuthn: (android.webkit.WebSettings) -> Unit = { WebAuthn.enable(it) },
+    ) {
         webView.settings.apply {
             javaScriptEnabled = true // muster's UI is htmx
             domStorageEnabled = true // its service worker and offline shell
@@ -76,6 +105,8 @@ object ShellWebView {
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             setGeolocationEnabled(false)
         }
+        // Passkeys (sign-in and "Confirm it's you"), as this app ([WebAuthn]).
+        enableWebAuthn(webView.settings)
         webView.webViewClient = Client(policy, callbacks)
         webView.webChromeClient = ShellChromeClient(policy, callbacks)
         webView.setDownloadListener(DownloadHandoff(callbacks::openExternally))
@@ -92,6 +123,8 @@ object ShellWebView {
                     BridgeMessage.parse(data, sourceOrigin.toString(), isMainFrame, policy, Instant.now()),
                 )
             }
+            // Pull to refresh's probe reports through this listener: no bridge, no probe, no pull.
+            PullProbeScript.install(webView, policy)
         }
         // Without WEB_MESSAGE_LISTENER (a very old WebView) there is no bridge:
         // the page then shows no "Pair this phone" button, and nothing pairs.
@@ -109,11 +142,29 @@ object ShellWebView {
         }
 
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+            // Pull to refresh's gesture count restarts with the new document.
+            ShellRefreshLayout.of(view)?.onPageStarted()
             // loadUrl and history navigation do not pass shouldOverrideUrlLoading.
             if (ShellNavigation.decide(url, policy) == ShellNavigation.Verdict.BLOCKED_ATTACHMENT) {
                 view.stopLoading()
                 cb.onBlockedAttachment()
+                return
             }
+            cb.onPageEvent(view, PageEvent.STARTED, url)
+        }
+
+        override fun onPageCommitVisible(view: WebView, url: String) {
+            cb.onPageEvent(view, PageEvent.COMMIT_VISIBLE, url)
+        }
+
+        override fun onPageFinished(view: WebView, url: String) {
+            // Both jobs: pull to refresh's spinner stops, and the app hears the milestone.
+            ShellRefreshLayout.of(view)?.onPageFinished()
+            cb.onPageEvent(view, PageEvent.FINISHED, url)
+        }
+
+        override fun onReceivedError(view: WebView, request: WebResourceRequest, error: android.webkit.WebResourceError) {
+            if (request.isForMainFrame) cb.onPageEvent(view, PageEvent.ERROR, request.url.toString())
         }
 
         override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {

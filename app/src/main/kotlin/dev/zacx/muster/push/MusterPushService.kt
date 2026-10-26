@@ -3,6 +3,8 @@ package dev.zacx.muster.push
 import android.content.Context
 import android.util.Log
 import dev.zacx.muster.MusterApp
+import dev.zacx.muster.feature.push.PushHandler
+import dev.zacx.muster.feature.shell.WebViewPrewarm
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.unifiedpush.android.connector.FailedReason
@@ -25,6 +27,9 @@ class MusterPushService : PushService() {
         val paired = runBlocking { app.store.read().paired }
         val outcome = app.pushHandler.handle(message.content, message.decrypted, paired)
         Log.i(TAG, "push: $outcome")
+        // A notification the user may tap: start Chromium now, in this
+        // already-running process, so the tap opens a warm shell.
+        if (outcome == PushHandler.Outcome.SHOWN) WebViewPrewarm.start(applicationContext)
     }
 
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {

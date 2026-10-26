@@ -23,6 +23,7 @@ muster must already have, and the app depends on each:
 | Web push on (`MUSTER_VAPID_PUBLIC_KEY`, `_PRIVATE_KEY`, `_SUBJECT`) | Without it muster sends no push, and the app shows "This muster server does not send push notifications." | The boot log says `web push: ENABLED`. |
 | `MUSTER_PUSH_EXTRA_HOSTS` set to your ntfy host, exactly (no scheme, no port) | muster refuses a phone's endpoint on any other host. The app checks the same thing first and tells you what to fix. | The boot log says `MUSTER_PUSH_EXTRA_HOSTS adds 1 operator push host(s) … : <your ntfy host>`. |
 | Your ntfy host reachable from muster on `https`, port 443 | muster sends a test push before it accepts a phone's registration. If that push fails, registration fails. | Registration in step 8 says "registered". A CDN bot rule that blocks Go's `User-Agent` shows up here (muster `docs/push.md`). |
+| If your ntfy server denies anonymous reads (`auth-default-access: deny-all`), a ntfy user that may READ `up*` topics, e.g. `auth-access: "<user>:up*:read-only"` beside `"*:up*:write-only"` | muster publishes anonymously, but the phone's ntfy app SUBSCRIBES, and an anonymous subscribe is refused (403). muster still reports every push as delivered, because ntfy accepted it, and nothing reaches the phone. | ntfy's `Server stats` log line shows `subscribers=0` while the phone is paired; it reads `subscribers=1` once the app has logged in (step 3). |
 | muster served on `https` with a certificate from a public CA | The app trusts system CAs only. A self-signed or user-installed CA is refused. | The muster page loads in step 6. |
 | Optional: `MUSTER_ANDROID_ALLOW_PIN_KEYS=1` | Only for a phone with no fingerprint or face: lets it pair with a biometric-or-PIN key. Off, such a phone pairs read-only. | Boot log, `android pairing:`. |
 
@@ -48,6 +49,17 @@ default server is when muster registers, and with none set it is `ntfy.sh`,
 which muster refuses. If you paired first, **unpair and pair again** (step
 10) after setting it: **Register push again** keeps the endpoint ntfy already
 made, on the old host.
+
+**If your ntfy server requires a login to subscribe** (the server table
+above): ntfy → **⋮ → Settings → Manage users → Add user** → service URL
+`https://<your ntfy host>`, and the username and password of the ntfy user
+that may read `up*` topics. Without it the phone pairs and registers, muster
+says every test was delivered, and **nothing arrives**: the app's anonymous
+subscription is refused. Adding the user after pairing is enough; no
+re-pairing is needed. Force-stop ntfy (**Settings → Apps → ntfy → Force
+stop**) and open it again so it reconnects with the login; it then fetches
+the messages its server cached meanwhile. (Found on the first real phone:
+the emulator runs used a local ntfy with anonymous access.)
 
 ## 4. Turn off battery optimization for ntfy
 
@@ -156,7 +168,7 @@ Phone settings says why, and **Register push again** retries.
 | "Install the ntfy app …" | Install ntfy (step 2). |
 | "This muster server names no push host …" | Set `MUSTER_PUSH_EXTRA_HOSTS` on the server. |
 | "muster refused this phone's push registration: …" | muster's test push to ntfy failed: check that muster reaches your ntfy host on 443. |
-| registered, but nothing arrives | Turn off ntfy's battery optimization (step 4) and open ntfy once. |
+| registered, but nothing arrives | If ntfy's server log shows `subscribers=0`, the ntfy app is not logged in: add the ntfy user (step 3), then force-stop and reopen ntfy. Otherwise turn off ntfy's battery optimization (step 4) and open ntfy once. |
 
 ## 10. Unpair or revoke
 

@@ -7,6 +7,7 @@ coreKtx = "1.19.1"
 biometric = "1.1.0"
 webkit = "1.17.1"
 browser = "1.10.0"
+swiperefreshlayout = "1.2.0"
 lifecycle = "2.11.0"
 datastore = "1.2.1"
 coroutines = "1.11.0"
@@ -14,8 +15,10 @@ serialization = "1.12.0"
 okhttp = "5.5.0"
 unifiedpush = "3.3.5"
 junit = "4.13.2"
+rhino = "1.8.0"
 robolectric = "4.17"
 androidxTestCore = "1.7.0"
+work = "2.12.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" }
@@ -24,6 +27,7 @@ androidx-activity-compose = { module = "androidx.activity:activity-compose", ver
 androidx-biometric = { module = "androidx.biometric:biometric", version.ref = "biometric" }
 androidx-webkit = { module = "androidx.webkit:webkit", version.ref = "webkit" }
 androidx-browser = { module = "androidx.browser:browser", version.ref = "browser" }
+androidx-swiperefreshlayout = { module = "androidx.swiperefreshlayout:swiperefreshlayout", version.ref = "swiperefreshlayout" }
 androidx-lifecycle-runtime-ktx = { module = "androidx.lifecycle:lifecycle-runtime-ktx", version.ref = "lifecycle" }
 androidx-datastore-core = { module = "androidx.datastore:datastore-core", version.ref = "datastore" }
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
@@ -38,7 +42,10 @@ okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver3", version.ref = "okhttp" }
 unifiedpush-connector = { module = "org.unifiedpush.android:connector", version.ref = "unifiedpush" }
 junit = { module = "junit:junit", version.ref = "junit" }
+rhino = { module = "org.mozilla:rhino", version.ref = "rhino" }
 robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+androidx-work-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "work" }
+androidx-work-testing = { module = "androidx.work:work-testing", version.ref = "work" }
 androidx-test-core = { module = "androidx.test:core", version.ref = "androidxTestCore" }
 
 [plugins]
