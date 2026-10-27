@@ -122,7 +122,7 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   Chromium too. Nothing renders or fetches muster pages in the background:
   the pages need the session cookie, which stays in the WebView. Its cost
   per run: [docs/background-refresh-cost.md](docs/background-refresh-cost.md)
-  (emulator only; battery on a real phone unmeasured).
+  (emulator only; battery and memory pressure on a real phone unmeasured).
 - **Startup timing (debug builds):** `adb logcat -s MusterStartup` logs each
   cold-start phase in ms since the process started, and the page's
   Navigation and Paint Timing. Every build reports "Fully drawn" when the

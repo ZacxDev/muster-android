@@ -26,10 +26,16 @@ emulator**, and what an emulator cannot tell you.
      batterystats`, `dumpsys alarm` and `dumpsys jobscheduler`.
 - **How the job was started:**
   - 14 runs with `adb shell am broadcast -n dev.zacx.muster/.RunRefreshReceiver`
-    (debug only). This enqueues the same worker as one-time work, which runs
-    through JobScheduler's `SystemJobService`.
+    (debug only). This enqueues the same worker as one-time work with no
+    constraints. WorkManager starts it at once in the app's process (its
+    in-process GreedyScheduler, since this one-time work has no constraints)
+    and also schedules a JobScheduler job for it; that job's `onStartJob`
+    arrives a moment later and finds the work already running. batterystats'
+    job time and job wakelock in these runs are that JobScheduler job's.
   - 1 run of the real periodic job, left to fire on its own schedule with the
-    process dead.
+    process dead. That run starts from JobScheduler (`SystemJobService`), so
+    the two paths differ: the broadcast runs measure the worker and the
+    process start, not how JobScheduler launches the periodic job.
 - **Two kinds of run:**
   - **Polled** (6 runs): `dumpsys meminfo` every ~50 ms while the job ran,
     for the peak PSS. A meminfo dump runs code in the app's process, so these
