@@ -17,11 +17,11 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
  * WebView's `scrollY` (see [PullGate] for why).
  *
  * A pull reloads the page (`WebView.reload()`). muster has no page-wide htmx
- * refresh: `muster:resync` is listened for by the task and agent lists only,
- * and the Agents list treats it as a background refresh that holds new cards
- * back behind its "N new" pill, so a pull would not show them. A reload is
- * the same on every page and shows what the server has now; the pull starts
- * only at the top, so it moves no scroll position either.
+ * refresh, and the Agents list treats its own refresh as a background one
+ * that holds new cards back behind its "N new" pill, so an htmx refresh would
+ * not show them. A reload is the same on every page and shows what the server
+ * has now; the pull starts only at the top, so it moves no scroll position
+ * either.
  *
  * The spinner shows until the WebView reports the page finished
  * ([onPageFinished], from `WebViewClient.onPageFinished`), or for
