@@ -49,7 +49,7 @@ class ShellRefreshLayoutTest {
         wv.loadUrl(url)
         gestures++
         if (layout.onInterceptTouchEvent(ev(MotionEvent.ACTION_DOWN, 500f, 300f))) return true
-        probe?.let { layout.onProbe(BridgeMessage.TouchStart(doc, seq ?: gestures, it)) }
+        probe?.let { layout.onProbe(BridgeMessage.TouchStart(doc, seq ?: gestures, it, light = false)) }
         for (i in 1..10) {
             if (layout.onInterceptTouchEvent(ev(MotionEvent.ACTION_MOVE, 500f + dx * i / 10, 300f + dy * i / 10))) return true
         }
@@ -186,8 +186,6 @@ class ShellRefreshLayoutTest {
         assertEquals("before any probe: muster's default, dark", darkColours, spinnerColours())
         layout.onProbe(BridgeMessage.TouchStart(doc, 1, atTop, light = true))
         assertEquals(lightColours, spinnerColours())
-        layout.onProbe(BridgeMessage.TouchStart(doc, 2, atTop, light = null))
-        assertEquals("a probe that does not say keeps the last theme", lightColours, spinnerColours())
         layout.onProbe(BridgeMessage.TouchStart(doc, 3, atTop, light = false))
         assertEquals(darkColours, spinnerColours())
     }

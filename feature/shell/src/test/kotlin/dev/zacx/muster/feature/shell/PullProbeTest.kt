@@ -55,38 +55,35 @@ class PullProbeTest {
     @Test
     fun touchStartMessagesAreUnderstood() {
         assertEquals(
-            BridgeMessage.TouchStart("k3x9q2", 1, Probe(0, null, Owner.PAGE, editing = false)),
-            parse("""{"type":"touch-start","doc":"k3x9q2","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false}"""),
+            BridgeMessage.TouchStart("k3x9q2", 1, Probe(0, null, Owner.PAGE, editing = false), light = false),
+            parse("""{"type":"touch-start","doc":"k3x9q2","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false,"light":false}"""),
         )
         assertEquals(
-            BridgeMessage.TouchStart("k3x9q2", 2, Probe(0, null, Owner.PAGE, editing = true)),
-            parse("""{"type":"touch-start","doc":"k3x9q2","seq":2,"doc_top":0,"owner":"page","editing":true}"""),
+            BridgeMessage.TouchStart("k3x9q2", 2, Probe(0, null, Owner.PAGE, editing = true), light = true),
+            parse("""{"type":"touch-start","doc":"k3x9q2","seq":2,"doc_top":0,"owner":"page","editing":true,"light":true}"""),
         )
         assertEquals(
-            BridgeMessage.TouchStart("a", 41, Probe(12, 367, Owner.OVERLAY, editing = false)),
-            parse("""{"type":"touch-start","doc":"a","seq":41,"doc_top":12,"inner_top":367,"owner":"overlay","editing":false}"""),
+            BridgeMessage.TouchStart("a", 41, Probe(12, 367, Owner.OVERLAY, editing = false), light = false),
+            parse("""{"type":"touch-start","doc":"a","seq":41,"doc_top":12,"inner_top":367,"owner":"overlay","editing":false,"light":false}"""),
         )
         assertEquals(
-            BridgeMessage.TouchStart("0123456789abcdef", 3, Probe(0, 0, Owner.GESTURES, editing = false)),
-            parse("""{"type":"touch-start","doc":"0123456789abcdef","seq":3,"doc_top":0,"inner_top":0,"owner":"gestures","editing":false}"""),
+            BridgeMessage.TouchStart("0123456789abcdef", 3, Probe(0, 0, Owner.GESTURES, editing = false), light = true),
+            parse("""{"type":"touch-start","doc":"0123456789abcdef","seq":3,"doc_top":0,"inner_top":0,"owner":"gestures","editing":false,"light":true}"""),
         )
     }
 
-    /** `light`: a JSON boolean when sent; a message without it leaves the theme unknown. */
+    /** `light` is read as sent; a probe without it is refused, like one without `editing`. */
     @Test
     fun touchStartCarriesTheTheme() {
         val ok = """"type":"touch-start","doc":"k3","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false"""
         assertEquals(true, (parse("""{$ok,"light":true}""") as BridgeMessage.TouchStart).light)
         assertEquals(false, (parse("""{$ok,"light":false}""") as BridgeMessage.TouchStart).light)
-        assertEquals(null, (parse("""{$ok}""") as BridgeMessage.TouchStart).light)
-        for (bad in listOf("\"true\"", "1", "null", "\"light\"")) {
-            assertTrue(bad, parse("""{$ok,"light":$bad}""") is BridgeMessage.Refused)
-        }
+        assertEquals(BridgeMessage.Refused("touch-start without light"), parse("""{$ok}"""))
     }
 
     @Test
     fun touchStartFromAnotherFrameOrOriginIsRefused() {
-        val msg = """{"type":"touch-start","doc":"k3","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false}"""
+        val msg = """{"type":"touch-start","doc":"k3","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false,"light":false}"""
         assertTrue(parse(msg) is BridgeMessage.TouchStart) // control
         assertTrue(parse(msg, main = false) is BridgeMessage.Refused)
         assertTrue(parse(msg, src = "https://m.example.test") is BridgeMessage.Refused)
@@ -95,7 +92,7 @@ class PullProbeTest {
 
     @Test
     fun malformedTouchStartIsRefused() {
-        val ok = """"doc":"k3","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false"""
+        val ok = """"doc":"k3","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false,"light":false"""
         assertTrue("control", parse("""{"type":"touch-start",$ok}""") is BridgeMessage.TouchStart)
         for (m in listOf(
             ok.replace(""""doc_top":0,""", ""),
@@ -121,6 +118,11 @@ class PullProbeTest {
             ok.replace(""""editing":false""", """"editing":"false""""),
             ok.replace(""""editing":false""", """"editing":0"""),
             ok.replace(""""editing":false""", """"editing":null"""),
+            // light: a JSON boolean, always sent.
+            ok.replace(""","light":false""", ""),
+            ok.replace(""""light":false""", """"light":"false""""),
+            ok.replace(""""light":false""", """"light":0"""),
+            ok.replace(""""light":false""", """"light":null"""),
         )) {
             assertTrue(m, parse("""{"type":"touch-start",$m}""") is BridgeMessage.Refused)
         }

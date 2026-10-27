@@ -56,7 +56,7 @@ class ShellRefreshLayout(
      * it, and the gate keeps its probe only if it is the gesture in progress's.
      */
     fun onProbe(m: BridgeMessage.TouchStart) {
-        m.light?.let(::applyTheme)
+        applyTheme(m.light)
         gate.onProbe(m.doc, m.seq, m.probe)
     }
 
