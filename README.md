@@ -121,12 +121,8 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   the phone unpaired cancels it and starts no Chromium. A shown push starts
   Chromium too. Nothing renders or fetches muster pages in the background:
   the pages need the session cookie, which stays in the WebView. Its cost
-  per run, measured on an emulator only, is in
-  [docs/background-refresh-cost.md](docs/background-refresh-cost.md): about
-  1.2 s from process start to done, 0.8 s of CPU, one 4 KB TLS exchange, no
-  wakelock of its own and no alarm; the process peaks near 95 MB PSS and is
-  left cached at about 56 MB plus an 8 MB renderer. Its battery cost on a
-  real phone has not been measured.
+  per run: [docs/background-refresh-cost.md](docs/background-refresh-cost.md)
+  (emulator only; battery on a real phone unmeasured).
 - **Startup timing (debug builds):** `adb logcat -s MusterStartup` logs each
   cold-start phase in ms since the process started, and the page's
   Navigation and Paint Timing. Every build reports "Fully drawn" when the
