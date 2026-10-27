@@ -26,8 +26,10 @@ import androidx.webkit.WebViewFeature
  *   way up takes its own vertical drags (`touch-action` without `pan-y`, an
  *   xterm); otherwise `page`;
  * - `editing`: true when the focused element is a non-empty text field (an
- *   `<input>` of a text type, a `<textarea>`, or a contenteditable). Only
- *   this boolean is sent: the script reads a field's length, never its text.
+ *   `<input>` of a text type, a `<textarea>`, or a contenteditable). To
+ *   decide it the script reads the focused field's text (`value`, or
+ *   `textContent` for a contenteditable) and checks its length; only the
+ *   boolean leaves the page, never the text.
  *
  * It sends geometry, a count and that boolean only: no text, no URL, nothing
  * typed, and the app sends nothing back. It runs in the main frame only, and is installed with
