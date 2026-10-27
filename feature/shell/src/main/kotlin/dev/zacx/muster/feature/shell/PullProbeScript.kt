@@ -9,7 +9,7 @@ import androidx.webkit.WebViewFeature
  * one-finger `touchstart` it tells the app, over the `musterApp` bridge, what
  * is under the finger:
  *
- *     {"type":"touch-start","doc":"k3x9q2","seq":3,"doc_top":0,"inner_top":null,"owner":"page","editing":false}
+ *     {"type":"touch-start","doc":"k3x9q2","seq":3,"doc_top":0,"inner_top":null,"owner":"page","editing":false,"light":false}
  *
  * - `doc`: a random id for this document, made when the script starts;
  * - `seq`: which gesture this is: the count of gestures that started in this
@@ -29,10 +29,15 @@ import androidx.webkit.WebViewFeature
  *   `<input>` of a text type, a `<textarea>`, or a contenteditable). To
  *   decide it the script reads the focused field's text (`value`, or
  *   `textContent` for a contenteditable) and checks its length; only the
- *   boolean leaves the page, never the text.
+ *   boolean leaves the page, never the text;
+ * - `light`: true when muster's light theme is in force, which is when the
+ *   root element has no `dark` class (muster's CSS is dark on `:root.dark`
+ *   and light on `:root:not(.dark)`; the class follows the operator's opt-in,
+ *   not the OS setting). The pull spinner takes its colours from it
+ *   ([ShellRefreshLayout.onProbe]).
  *
- * It sends geometry, a count and that boolean only: no text, no URL, nothing
- * typed, and the app sends nothing back. It runs in the main frame only, and is installed with
+ * It sends geometry, a count and those two booleans only: no text, no URL,
+ * nothing typed, and the app sends nothing back. It runs in the main frame only, and is installed with
  * `allowedOriginRules` set to exactly the paired origin, so no other origin's
  * document runs it. The listener re-checks origin and frame
  * ([BridgeMessage.parse]).
@@ -116,7 +121,8 @@ object PullProbeScript {
       var vv = window.visualViewport;
       var docTop = Math.ceil(se.scrollTop + (vv ? vv.offsetTop : 0));
       bridge.postMessage(JSON.stringify({
-        type: '$MESSAGE_TYPE', doc: DOC, seq: seq, doc_top: docTop, inner_top: inner, owner: owner(start), editing: editing()
+        type: '$MESSAGE_TYPE', doc: DOC, seq: seq, doc_top: docTop, inner_top: inner, owner: owner(start), editing: editing(),
+        light: !document.documentElement.classList.contains('dark')
       }));
     } catch (err) {}
   }, { capture: true, passive: true });

@@ -25,8 +25,12 @@ import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
  *
  * The spinner shows until the WebView reports the page finished
  * ([onPageFinished], from `WebViewClient.onPageFinished`), or for
- * [TIMEOUT_MS] at most. Its colours are muster's (dark theme: the accent on
- * the raised surface).
+ * [TIMEOUT_MS] at most. Its colours are muster's accent on its raised
+ * surface, in the theme the page is in: the page's probe reports it at every
+ * touch ([BridgeMessage.TouchStart.light]), and a pull cannot start before
+ * its own gesture's probe has arrived ([PullGate]), so the spinner a pull
+ * shows is in the theme the page had at that pull's touch. Before any probe
+ * it is muster's default, dark.
  */
 @SuppressLint("ViewConstructor")
 class ShellRefreshLayout(
@@ -38,15 +42,30 @@ class ShellRefreshLayout(
     private val handler = Handler(Looper.getMainLooper())
     private val timeout = Runnable { if (isRefreshing) { Log.i(TAG, "refresh: timed out"); isRefreshing = false } }
 
+    /** The theme the spinner is coloured for: true light, false dark (declared before `init`, which sets it). */
+    private var light: Boolean? = null
+
     init {
         addView(webView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-        setColorSchemeColors(ACCENT)
-        setProgressBackgroundColorSchemeColor(SURFACE)
+        applyTheme(light = false)
         setOnRefreshListener { refresh() }
     }
 
-    /** The page's `touch-start` report; the gate keeps it only if it is the gesture in progress's. */
-    fun onProbe(m: BridgeMessage.TouchStart) = gate.onProbe(m.doc, m.seq, m.probe)
+    /**
+     * The page's `touch-start` report: the spinner takes the page's theme from
+     * it, and the gate keeps its probe only if it is the gesture in progress's.
+     */
+    fun onProbe(m: BridgeMessage.TouchStart) {
+        m.light?.let(::applyTheme)
+        gate.onProbe(m.doc, m.seq, m.probe)
+    }
+
+    private fun applyTheme(light: Boolean) {
+        if (this.light == light) return
+        this.light = light
+        setColorSchemeColors(if (light) ACCENT_LIGHT else ACCENT)
+        setProgressBackgroundColorSchemeColor(if (light) SURFACE_LIGHT else SURFACE)
+    }
 
     /** `WebViewClient.onPageStarted` for this layout's WebView: a new document counts its gestures from 1. */
     fun onPageStarted() = gate.onPageStarted()
@@ -117,6 +136,12 @@ class ShellRefreshLayout(
 
         /** muster's dark-theme raised surface, `--mu-s1` (#19162A). */
         const val SURFACE = 0xFF19162A.toInt()
+
+        /** muster's light-theme accent, `--mu-accent` (#835D0F). */
+        const val ACCENT_LIGHT = 0xFF835D0F.toInt()
+
+        /** muster's light-theme raised surface, `--mu-s1` (#FFFFFF). */
+        const val SURFACE_LIGHT = 0xFFFFFFFF.toInt()
 
         /** The shell's refresh layout around [webView], if it has one. */
         fun of(webView: WebView): ShellRefreshLayout? = webView.parent as? ShellRefreshLayout

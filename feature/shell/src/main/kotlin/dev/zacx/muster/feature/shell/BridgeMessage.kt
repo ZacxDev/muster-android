@@ -20,10 +20,11 @@ import java.time.format.DateTimeParseException
  *     {"type":"open-notification-settings"}
  *
  * and one the app's own document-start script sends from muster's pages
- * (PullProbeScript; scroll geometry, which gesture it is, and whether text
- * is being edited, as a boolean; never any text):
+ * (PullProbeScript; scroll geometry, which gesture it is, whether text is
+ * being edited and whether muster's light theme is in force, as booleans;
+ * never any text):
  *
- *     {"type":"touch-start","doc":"k3x9q2","seq":3,"doc_top":0,"inner_top":null,"owner":"page","editing":false}
+ *     {"type":"touch-start","doc":"k3x9q2","seq":3,"doc_top":0,"inner_top":null,"owner":"page","editing":false,"light":false}
  *
  * Everything else is refused. The design also names "request
  * POST_NOTIFICATIONS" and "theme"; muster sends neither yet, and the app asks
@@ -38,8 +39,15 @@ sealed interface BridgeMessage {
     /**
      * What is under the finger at a `touchstart`, for pull to refresh
      * ([PullGate]): the [seq]th gesture that started in the document [doc].
+     * [light] is whether muster's light theme is in force on the page; null
+     * when the message does not say.
      */
-    data class TouchStart(val doc: String, val seq: Long, val probe: PullGate.Probe) : BridgeMessage
+    data class TouchStart(
+        val doc: String,
+        val seq: Long,
+        val probe: PullGate.Probe,
+        val light: Boolean? = null,
+    ) : BridgeMessage
 
     data class Refused(val reason: String) : BridgeMessage
 
@@ -87,7 +95,8 @@ sealed interface BridgeMessage {
         /**
          * Scroll offsets are whole CSS px, `seq` a whole number from 1, `doc`
          * a short lowercase id and `editing` a JSON boolean; anything else (a
-         * string, a fraction, absent) is not the script's.
+         * string, a fraction, absent) is not the script's. `light` is a JSON
+         * boolean when present; absent, the theme is unknown.
          */
         private fun touchStart(obj: JsonObject): BridgeMessage {
             fun int(k: String): Int? = (obj[k] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toIntOrNull()
@@ -95,11 +104,13 @@ sealed interface BridgeMessage {
                 ?.takeIf { DOC_ID.matches(it) } ?: return Refused("touch-start without a document id")
             val seq = (obj["seq"] as? JsonPrimitive)?.takeIf { !it.isString }?.content?.toLongOrNull()
                 ?.takeIf { it >= 1 } ?: return Refused("touch-start without a gesture count")
-            val editing = when ((obj["editing"] as? JsonPrimitive)?.takeIf { !it.isString }?.content) {
+            fun bool(k: String): Boolean? = when ((obj[k] as? JsonPrimitive)?.takeIf { !it.isString }?.content) {
                 "true" -> true
                 "false" -> false
-                else -> return Refused("touch-start without editing")
+                else -> null
             }
+            val editing = bool("editing") ?: return Refused("touch-start without editing")
+            val light = if (obj.containsKey("light")) bool("light") ?: return Refused("touch-start with a bad light") else null
             val docTop = int("doc_top") ?: return Refused("touch-start without doc_top")
             val innerTop = when (obj["inner_top"]) {
                 null, JsonNull -> null
@@ -107,7 +118,7 @@ sealed interface BridgeMessage {
             }
             val owner = PullGate.Owner.fromWire((obj["owner"] as? JsonPrimitive)?.takeIf { it.isString }?.content)
                 ?: return Refused("touch-start with an unknown owner")
-            return TouchStart(doc, seq, PullGate.Probe(docTop, innerTop, owner, editing))
+            return TouchStart(doc, seq, PullGate.Probe(docTop, innerTop, owner, editing), light)
         }
 
         private val DOC_ID = Regex("[0-9a-z]{1,16}")

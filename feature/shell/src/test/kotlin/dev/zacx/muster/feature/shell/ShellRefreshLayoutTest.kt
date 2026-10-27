@@ -164,6 +164,34 @@ class ShellRefreshLayoutTest {
         },
     )
 
+    /** The spinner's colours as SwipeRefreshLayout holds them: the arrow's, and the circle behind it. */
+    private fun spinnerColours(): Pair<List<Int>, Int> {
+        fun field(name: String) = androidx.swiperefreshlayout.widget.SwipeRefreshLayout::class.java
+            .getDeclaredField(name).apply { isAccessible = true }.get(layout)
+        val progress = field("mProgress") as androidx.swiperefreshlayout.widget.CircularProgressDrawable
+        val circle = field("mCircleView")
+        val bg = circle.javaClass.getMethod("getBackgroundColor").apply { isAccessible = true }.invoke(circle) as Int
+        return progress.colorSchemeColors.toList() to bg
+    }
+
+    private val darkColours = listOf(0xFFE4B556.toInt()) to 0xFF19162A.toInt()
+    private val lightColours = listOf(0xFF835D0F.toInt()) to 0xFFFFFFFF.toInt()
+
+    /**
+     * 🔴 The spinner follows the theme the page is in, as the probe reports
+     * it: muster's dark default until a probe says light, and back again.
+     */
+    @Test
+    fun theSpinnerTakesThePagesThemeFromTheProbe() {
+        assertEquals("before any probe: muster's default, dark", darkColours, spinnerColours())
+        layout.onProbe(BridgeMessage.TouchStart(doc, 1, atTop, light = true))
+        assertEquals(lightColours, spinnerColours())
+        layout.onProbe(BridgeMessage.TouchStart(doc, 2, atTop, light = null))
+        assertEquals("a probe that does not say keeps the last theme", lightColours, spinnerColours())
+        layout.onProbe(BridgeMessage.TouchStart(doc, 3, atTop, light = false))
+        assertEquals(darkColours, spinnerColours())
+    }
+
     @Test
     fun theSpinnerStopsAtTheTimeoutIfThePageNeverFinishes() {
         layout.refresh()

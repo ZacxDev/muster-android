@@ -134,6 +134,24 @@ class PullProbeScriptJsTest {
         assertFalse("no text in any message", posted().any { "secret-draft" in it })
     }
 
+    /**
+     * `light` is muster's theme in force: its CSS is dark on `:root.dark` and
+     * light on `:root:not(.dark)`, whatever the OS asks for, so the class on
+     * the root element is the whole answer.
+     */
+    @Test
+    fun lightIsTheAbsenceOfTheDarkClassOnTheRoot() {
+        fun light(): String? = (kotlinx.serialization.json.Json.parseToJsonElement(posted().last())
+            as kotlinx.serialization.json.JsonObject)["light"]?.toString()
+        js("html.classList = { contains: function (c) { return c === 'dark'; } }; touch(body)")
+        assertEquals("false", light())
+        js("html.classList = { contains: function (c) { return false; } }; touch(body)")
+        assertEquals("true", light())
+        js("html.classList = { contains: function (c) { return c === 'dark'; } }; touch(body)")
+        assertEquals("false", light())
+        assertEquals("through the app's parser", false, lastProbe().light)
+    }
+
     @Test
     fun nothingIsSentWithoutTheBridgeButTheGestureIsStillCounted() {
         js("var saved = musterApp; musterApp = undefined; touch(body); musterApp = saved; touch(body)")

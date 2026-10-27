@@ -72,6 +72,18 @@ class PullProbeTest {
         )
     }
 
+    /** `light`: a JSON boolean when sent; a message without it leaves the theme unknown. */
+    @Test
+    fun touchStartCarriesTheTheme() {
+        val ok = """"type":"touch-start","doc":"k3","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false"""
+        assertEquals(true, (parse("""{$ok,"light":true}""") as BridgeMessage.TouchStart).light)
+        assertEquals(false, (parse("""{$ok,"light":false}""") as BridgeMessage.TouchStart).light)
+        assertEquals(null, (parse("""{$ok}""") as BridgeMessage.TouchStart).light)
+        for (bad in listOf("\"true\"", "1", "null", "\"light\"")) {
+            assertTrue(bad, parse("""{$ok,"light":$bad}""") is BridgeMessage.Refused)
+        }
+    }
+
     @Test
     fun touchStartFromAnotherFrameOrOriginIsRefused() {
         val msg = """{"type":"touch-start","doc":"k3","seq":1,"doc_top":0,"inner_top":null,"owner":"page","editing":false}"""
