@@ -120,8 +120,9 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   cancelled on unpair, on revocation and on change server; a run that finds
   the phone unpaired cancels it and starts no Chromium. A shown push starts
   Chromium too. Nothing renders or fetches muster pages in the background:
-  the pages need the session cookie, which stays in the WebView. Its battery
-  and memory cost on a real phone has not been measured.
+  the pages need the session cookie, which stays in the WebView. Its cost
+  per run: [docs/background-refresh-cost.md](docs/background-refresh-cost.md)
+  (emulator only; battery and memory pressure on a real phone unmeasured).
 - **Startup timing (debug builds):** `adb logcat -s MusterStartup` logs each
   cold-start phase in ms since the process started, and the page's
   Navigation and Paint Timing. Every build reports "Fully drawn" when the
