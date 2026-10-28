@@ -69,17 +69,27 @@ class QuestionTextAndAlertTest {
     }
 
     /**
-     * The user swiped the question away; the suggestions re-push (`update`)
-     * then arrives. It is dropped: nothing posted, so nothing alerts and the
-     * dismissed question does not come back.
+     * The suggestions re-push (`update`) arrives with nothing showing: the
+     * user swiped the question away, or its first push never arrived. It is
+     * posted SILENT: the question is not lost, and it does not alert again.
      */
     @Test
-    fun anUpdateRePushAfterTheUserSwipedItAwayPostsNothing() {
+    fun anUpdateRePushWithNothingShowingIsPostedSilent() {
         push(ask(update = false))
         assertEquals(1, shadowOf(nm).activeNotifications.size)
-        nm.cancel("attention-ask-41", AndroidNotifier.ID) // the user's swipe
+        nm.cancel("attention-ask-41", AndroidNotifier.ID) // the user's swipe, or a first push that never arrived
         push(ask(update = true))
-        assertEquals(0, shadowOf(nm).activeNotifications.size)
+        val n = shown("attention-ask-41")
+        assertEquals(Notification.GROUP_ALERT_SUMMARY, n.groupAlertBehavior)
+        assertEquals(0, n.flags and Notification.FLAG_GROUP_SUMMARY)
+        assertEquals(null, n.sound)
+    }
+
+    /** Control: a FIRST push is not silent, so the silence above is the update's alone. */
+    @Test
+    fun aFirstPushIsNotSilent() {
+        push(ask(update = false))
+        assertEquals(false, shown("attention-ask-41").groupAlertBehavior == Notification.GROUP_ALERT_SUMMARY)
     }
 
     /** Control: the same re-push while the first is still showing updates it in place, without alerting. */

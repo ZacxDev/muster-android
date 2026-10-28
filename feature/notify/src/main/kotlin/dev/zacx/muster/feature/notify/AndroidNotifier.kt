@@ -62,10 +62,15 @@ class AndroidNotifier(
             return
         }
         val tag = tagOf(payload)
-        if (payload.update && active(tag) == null) return
+        // An update with nothing showing (the user swiped the first away, or
+        // the first push never arrived) is posted SILENT: onlyAlertOnce only
+        // quiets a notification that is still showing, and dropping it instead
+        // would lose a question whose first push was lost.
+        val silent = payload.update && active(tag) == null
         Channels.ensure(context)
         val channel = Channels.forType(payload.type)
         val b = base(channel, payload)
+            .setSilent(silent)
             .setContentIntent(tap(tag, payload.path))
             .setAutoCancel(true)
             .addExtras(Bundle().apply { putString(EXTRA_QUESTION, payload.body) })

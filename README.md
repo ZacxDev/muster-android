@@ -104,7 +104,8 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   `VISIBILITY_PUBLIC`; everything else is `VISIBILITY_PRIVATE` with a public
   version of the same lines. On the Asks and approvals or Tasks channel;
   `resolved` cancels by tag; a re-push marked `update` (an ask's suggested
-  replies arriving) replaces the notification without alerting again.
+  replies arriving) replaces the notification without alerting again; with
+  nothing showing any more it is posted silently, never dropped.
   POST_NOTIFICATIONS is asked for right after pairing.
 - **An ask's buttons (signed actions):** payload v2's `actions` name each chip
   (the asker's options, then the suggested replies) by index into `ask`. Only
