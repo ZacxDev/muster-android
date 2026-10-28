@@ -23,7 +23,10 @@ import kotlinx.serialization.json.longOrNull
  * `ask.suggestions`; that chip's text is both the button's label and the exact
  * answer it sends. [actions] holds only what resolved: an action whose chip is
  * absent (muster dropped it to fit, or left it out as secret-shaped), cut, out
- * of range, or that names another ask, is dropped, never guessed at.
+ * of range, or that names another ask, is dropped, never guessed at. The
+ * inline-reply Answer (`"input": true`) is dropped too, like an unknown id:
+ * the held-reply flow it needs is not built, so the app has nothing to draw
+ * for it.
  */
 data class AskPush(
     /** The ask's id: the route's `{id}`. */
@@ -34,17 +37,18 @@ data class AskPush(
     val target: String get() = id.toString()
 
     /**
-     * The buttons the notification draws: Android shows at most
-     * [MAX_BUTTONS]. Dismiss always keeps its place (when muster offered it),
-     * and the chips fill the rest in muster's order: every option, then every
-     * suggestion. The inline-reply Answer is not drawn: the held-reply flow it
-     * needs is not built yet, and a tap on the notification opens the ask's
-     * page, where the answer can be typed.
+     * The buttons the notification draws: only the ask's own options, in
+     * muster's order, and Dismiss. Android shows at most [MAX_BUTTONS];
+     * Dismiss always keeps its place (when muster offered it) and the options
+     * fill the rest. A suggested reply NEVER becomes a button, whatever the
+     * option count (the operator's decision): it stays in the notification's
+     * text and on the ask's page, where a tap on the notification leads. So a
+     * free-text ask with no options gets Dismiss alone.
      */
     fun buttons(): List<AskAction> {
         val dismiss = actions.filter { it.kind == AskAction.Kind.DISMISS }.take(1)
-        val chips = actions.filter { it.kind == AskAction.Kind.OPTION || it.kind == AskAction.Kind.SUGGESTION }
-        return chips.take(MAX_BUTTONS - dismiss.size) + dismiss
+        val options = actions.filter { it.kind == AskAction.Kind.OPTION }
+        return options.take(MAX_BUTTONS - dismiss.size) + dismiss
     }
 
     companion object {
@@ -65,7 +69,7 @@ data class AskPush(
     }
 }
 
-/** One resolved action. [answer] is the exact text an answer sends; null for Dismiss and the inline reply. */
+/** One resolved action. [answer] is the exact text an answer sends; null for Dismiss. */
 data class AskAction(
     val action: ActionId,
     val target: String,
@@ -73,7 +77,7 @@ data class AskAction(
     val answer: String?,
     val kind: Kind,
 ) {
-    enum class Kind { OPTION, SUGGESTION, INPUT, DISMISS }
+    enum class Kind { OPTION, SUGGESTION, DISMISS }
 }
 
 /** What the notification shows after a tap. */
@@ -108,7 +112,7 @@ internal object AskPushParser {
         for (e in actionsElement as? JsonArray ?: JsonArray(emptyList())) {
             val a = action(e as? JsonObject ?: continue, target, options, suggestions) ?: continue
             val duplicate = out.any {
-                it.kind == a.kind && (a.kind == AskAction.Kind.DISMISS || a.kind == AskAction.Kind.INPUT || it.answer == a.answer)
+                it.kind == a.kind && (a.kind == AskAction.Kind.DISMISS || it.answer == a.answer)
             }
             if (!duplicate) out += a
         }
@@ -123,14 +127,12 @@ internal object AskPushParser {
         val option = index(o, "option")
         val suggestion = index(o, "suggestion")
         if (option == INVALID || suggestion == INVALID) return null
-        val input = (o["input"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true
+        // The inline reply is not built: an `input` action is dropped like an unknown id.
+        if ((o["input"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true) return null
         val label = str(o, "label")?.trim()?.takeIf { it.isNotEmpty() }?.let { PayloadV2Parser.cut(it, AskPush.MAX_LABEL) }
 
         return when (ActionId.fromWire(wire)) {
             ActionId.ASK_ANSWER -> when {
-                input && option == null && suggestion == null ->
-                    AskAction(ActionId.ASK_ANSWER, t, label ?: "Answer", null, AskAction.Kind.INPUT)
-                input -> null
                 option != null && suggestion == null ->
                     options.getOrNull(option)?.let { AskAction(ActionId.ASK_ANSWER, t, it, it, AskAction.Kind.OPTION) }
                 suggestion != null && option == null ->
@@ -138,7 +140,7 @@ internal object AskPushParser {
                 else -> null
             }
             ActionId.ASK_DISMISS ->
-                if (option == null && suggestion == null && !input) {
+                if (option == null && suggestion == null) {
                     AskAction(ActionId.ASK_DISMISS, t, label ?: "Dismiss", null, AskAction.Kind.DISMISS)
                 } else {
                     null

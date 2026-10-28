@@ -59,15 +59,28 @@ class AskButtonsTest {
         {"id":"ask_answer","target":"41","suggestion":0},{"id":"ask_answer","label":"Answer","target":"41","input":true},
         {"id":"ask_dismiss","label":"Dismiss","target":"41"}]"""
 
+    /** A suggestion is never a button: a free-text ask gets Dismiss alone. */
     @Test
-    fun theChipsAndDismissAreTheButtons() {
+    fun aSuggestionOnlyAskGetsDismissOnly() {
         push("""{"id":41,"suggestions":["After the backup"]}""", """[{"id":"ask_answer","target":"41","suggestion":0},{"id":"ask_dismiss","label":"Dismiss","target":"41"}]""")
-        assertEquals(listOf("After the backup", "Dismiss"), labels(shown()))
-        assertEquals(listOf(0 to "After the backup", 1 to null), built.map { it.second to it.third.answer })
+        assertEquals(listOf("Dismiss"), labels(shown()))
+        assertEquals(listOf(0 to null), built.map { it.second to it.third.answer })
         assertTrue(built.all { it.first == tag })
     }
 
-    /** Android shows three: the first two chips in muster's order, and Dismiss. */
+    /** One option and suggestions: that option and Dismiss, the third slot left empty. */
+    @Test
+    fun oneOptionAndSuggestionsGetThatOptionAndDismiss() {
+        push(
+            """{"id":41,"options":["ship it"],"suggestions":["Wait for Monday","After the backup"]}""",
+            """[{"id":"ask_answer","target":"41","option":0},{"id":"ask_answer","target":"41","suggestion":0},
+                {"id":"ask_answer","target":"41","suggestion":1},{"id":"ask_dismiss","label":"Dismiss","target":"41"}]""",
+        )
+        assertEquals(listOf("ship it", "Dismiss"), labels(shown()))
+        assertEquals(listOf(0 to "ship it", 1 to null), built.map { it.second to it.third.answer })
+    }
+
+    /** Android shows three: the first two options in muster's order, and Dismiss (never the suggestion). */
     @Test
     fun atMostThreeButtonsAndDismissKeepsItsPlace() {
         push("""{"id":41,"options":["ship it","wait"],"suggestions":["After the backup"]}""", all)

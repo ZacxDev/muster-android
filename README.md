@@ -107,8 +107,11 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   replies arriving) replaces the notification without alerting again.
   POST_NOTIFICATIONS is asked for right after pairing.
 - **An ask's buttons (signed actions):** payload v2's `actions` name each chip
-  (the asker's options, then the suggested replies) by index into `ask`; the
-  app draws at most three buttons: the first two chips and **Dismiss**. A tap
+  (the asker's options, then the suggested replies) by index into `ask`. Only
+  the ask's own options become buttons, at most two in muster's order, plus
+  **Dismiss**. A suggested reply never becomes a button, whatever the option
+  count: it stays in the notification's text and on the ask's page. A
+  free-text ask with no options gets Dismiss alone. A tap
   opens the invisible step-up activity (`PendingIntent.getActivity`, straight
   to it): from the lock screen it asks for the unlock first, then
   `POST /api/device/challenge`, then a BiometricPrompt whose description is
@@ -120,8 +123,8 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   written into the notification, buttons kept so the user can tap again; a
   question already answered or gone loses its buttons and says so; a sent one
   is removed. A phone paired read-only gets no buttons. The inline-reply
-  Answer is not drawn yet (it needs the held-reply flow); tapping the
-  notification still opens the question's page.
+  Answer (`input`) is ignored like an unknown action (it needs the held-reply
+  flow, not built); tapping the notification still opens the question's page.
 - **Phone settings** (long-press the launcher icon): pairing, step-up key,
   push state, unpair.
 - **Opening (0.1.2):** the launcher shows the home page's last frame until

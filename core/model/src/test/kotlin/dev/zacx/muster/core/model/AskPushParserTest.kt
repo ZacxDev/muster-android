@@ -54,25 +54,54 @@ class AskPushParserTest {
                     ActionId.ASK_ANSWER, "41", "Wait for Monday, until the backup is verified",
                     "Wait for Monday, until the backup is verified", AskAction.Kind.SUGGESTION,
                 ),
-                AskAction(ActionId.ASK_ANSWER, "41", "Answer", null, AskAction.Kind.INPUT),
                 AskAction(ActionId.ASK_DISMISS, "41", "Dismiss", null, AskAction.Kind.DISMISS),
             ),
             a.actions,
         )
-        // Three buttons at most: the first two chips, and Dismiss keeps its place.
+        // The ask's two options and Dismiss; the suggestion is parsed but is never a button.
         assertEquals(listOf("ship it", "wait for Monday", "Dismiss"), labels(a))
     }
 
+    /** A free-text ask (suggestions, no options): its suggested replies get no button, so Dismiss alone. */
     @Test
-    fun suggestionsBecomeButtonsWhenTheyFit() {
+    fun aSuggestionOnlyAskGetsDismissOnly() {
         val a = ask(
-            """{"id":41,"suggestions":["Yes, after the backup","No"]}""",
+            """{"id":41,"suggestions":["Yes, after the backup","No, leave it"]}""",
             """[{"id":"ask_answer","target":"41","suggestion":1},{"id":"ask_answer","target":"41","suggestion":0},
                {"id":"ask_dismiss","label":"Dismiss","target":"41"}]""",
-        )
-        // muster's order, not the chip list's.
-        assertEquals(listOf("No", "Yes, after the backup", "Dismiss"), labels(a))
-        assertEquals(listOf("No", "Yes, after the backup", null), a!!.buttons().map { it.answer })
+        )!!
+        assertEquals(listOf(AskAction.Kind.SUGGESTION, AskAction.Kind.SUGGESTION, AskAction.Kind.DISMISS), a.actions.map { it.kind })
+        assertEquals(listOf("Dismiss"), labels(a))
+        assertEquals(listOf(ActionId.ASK_DISMISS), a.buttons().map { it.action })
+    }
+
+    /** One option and room for two more: the free slot stays empty rather than take a suggestion. */
+    @Test
+    fun oneOptionAndSuggestionsGetThatOptionAndDismiss() {
+        val a = ask(
+            """{"id":41,"options":["ship it"],"suggestions":["Wait for Monday","After the backup is verified"]}""",
+            """[{"id":"ask_answer","target":"41","option":0},{"id":"ask_answer","target":"41","suggestion":0},
+               {"id":"ask_answer","target":"41","suggestion":1},{"id":"ask_dismiss","label":"Dismiss","target":"41"}]""",
+        )!!
+        assertEquals(listOf("ship it", "Dismiss"), labels(a))
+        assertEquals(listOf("ship it", null), a.buttons().map { it.answer })
+    }
+
+    /**
+     * Three options: the first two in muster's order (the actions', not the
+     * chip list's), and Dismiss. A suggestion muster lists ahead of them still
+     * gets no button.
+     */
+    @Test
+    fun threeOptionsGetTheFirstTwoInMustersOrderAndDismiss() {
+        val a = ask(
+            """{"id":41,"options":["ship it","wait for Monday","roll back"],"suggestions":["After the backup is verified"]}""",
+            """[{"id":"ask_answer","target":"41","suggestion":0},{"id":"ask_answer","target":"41","option":2},
+               {"id":"ask_answer","target":"41","option":0},{"id":"ask_answer","target":"41","option":1},
+               {"id":"ask_dismiss","label":"Dismiss","target":"41"}]""",
+        )!!
+        assertEquals(listOf("roll back", "ship it", "Dismiss"), labels(a))
+        assertEquals(listOf("roll back", "ship it", null), a.buttons().map { it.answer })
     }
 
     /** The first push carries no `update`; only JSON `true` is an update. */
@@ -135,8 +164,9 @@ class AskPushParserTest {
         assertEquals(emptyList<AskAction>(), one("""{"id":"ask_answer","target":"41","option":0.5}"""))
         assertEquals(emptyList<AskAction>(), one("""{"id":"ask_answer","target":"41","option":null}"""))
         assertEquals(emptyList<AskAction>(), one("""{"id":"ask_answer","target":"41","option":0,"suggestion":0}"""))
-        // An answer naming no chip and not the inline reply.
+        // An answer naming no chip; an inline reply (`input`), alone or with a chip.
         assertEquals(emptyList<AskAction>(), one("""{"id":"ask_answer","target":"41"}"""))
+        assertEquals(emptyList<AskAction>(), one("""{"id":"ask_answer","label":"Answer","target":"41","input":true}"""))
         assertEquals(emptyList<AskAction>(), one("""{"id":"ask_answer","target":"41","option":0,"input":true}"""))
         // A dismiss carrying a chip; an id that is not the ask's; a bare verb.
         assertEquals(emptyList<AskAction>(), one("""{"id":"ask_dismiss","target":"41","option":0}"""))
@@ -164,11 +194,22 @@ class AskPushParserTest {
         assertEquals(emptyList<AskAction>(), ask("""{"id":41}""", """{"id":"ask_dismiss"}""")!!.actions)
     }
 
+    /** An `input` action is ignored like an unknown id: the rest of the push parses, and it has no button. */
     @Test
-    fun theInlineReplyIsParsedButNotDrawn() {
-        val a = ask("""{"id":41}""", """[{"id":"ask_answer","label":"Answer","target":"41","input":true},{"id":"ask_dismiss","label":"Dismiss","target":"41"}]""")!!
-        assertEquals(listOf(AskAction.Kind.INPUT, AskAction.Kind.DISMISS), a.actions.map { it.kind })
-        assertEquals(listOf("Dismiss"), labels(a))
+    fun anInputActionIsIgnored() {
+        val a = ask(
+            """{"id":41,"options":["ship it"]}""",
+            """[{"id":"ask_answer","target":"41","option":0},{"id":"ask_answer","label":"Type a reply","target":"41","input":true},
+               {"id":"ask_dismiss","label":"Dismiss","target":"41"}]""",
+        )!!
+        assertEquals(
+            listOf(
+                AskAction(ActionId.ASK_ANSWER, "41", "ship it", "ship it", AskAction.Kind.OPTION),
+                AskAction(ActionId.ASK_DISMISS, "41", "Dismiss", null, AskAction.Kind.DISMISS),
+            ),
+            a.actions,
+        )
+        assertEquals(listOf("ship it", "Dismiss"), labels(a))
     }
 
     @Test
