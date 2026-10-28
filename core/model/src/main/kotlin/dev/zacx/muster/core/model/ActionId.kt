@@ -12,8 +12,9 @@ package dev.zacx.muster.core.model
  * routes: a bare "cancel" would be ambiguous between a queued message and an
  * ask.
  *
- * `{id}` / `{name}` are filled from the notification's own target, which the
- * app re-reads from muster before showing the action.
+ * `{id}` / `{name}` are filled from the action's target. For an ask the
+ * target must be the ask's own id in the same push (AskPushParser), checked
+ * again as a decimal id before any request (DeviceApi).
  */
 enum class ActionId(val wire: String, val route: String) {
     QUEUE_SEND_NOW("queue_send_now", "/api/device/actions/send-queue/{id}/send-now"),

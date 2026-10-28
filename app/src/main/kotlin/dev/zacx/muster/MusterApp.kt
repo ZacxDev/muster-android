@@ -10,14 +10,18 @@ import androidx.work.WorkManager
 import dev.zacx.muster.core.auth.AesGcmAead
 import dev.zacx.muster.core.auth.DataStoreDeviceStore
 import dev.zacx.muster.core.auth.DeviceStore
+import dev.zacx.muster.core.auth.KeyKind
 import dev.zacx.muster.core.auth.KeystoreStepUpKeys
 import dev.zacx.muster.core.auth.Pairing
 import dev.zacx.muster.core.auth.StepUpKeys
+import dev.zacx.muster.core.model.AskOutcome
 import dev.zacx.muster.core.net.DeviceApi
 import dev.zacx.muster.feature.notify.AndroidNotifier
 import dev.zacx.muster.feature.notify.Channels
 import dev.zacx.muster.feature.push.PushHandler
 import dev.zacx.muster.feature.push.PushRegistrar
+import dev.zacx.muster.feature.stepup.StepUpActivity
+import dev.zacx.muster.feature.stepup.StepUpHost
 import dev.zacx.muster.shell.ShellLocalState
 import dev.zacx.muster.shell.ShellSnapshot
 import kotlinx.coroutines.CoroutineScope
@@ -27,7 +31,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 /** Wires the modules together. One instance of each store per process. */
-class MusterApp : Application(), Configuration.Provider {
+class MusterApp : Application(), Configuration.Provider, StepUpHost {
     /**
      * WorkManager starts on first use, not at every process start (its
      * App Startup initializer is removed in the manifest): a cold start of
@@ -44,7 +48,19 @@ class MusterApp : Application(), Configuration.Provider {
 
     val keys: StepUpKeys by lazy { KeystoreStepUpKeys(this) }
 
-    val notifier by lazy { AndroidNotifier(this, ::tapIntent) }
+    val notifier by lazy {
+        AndroidNotifier(this, action = { tag, i, title, path, a -> StepUpActivity.pendingIntent(this, tag, i, title, path, a) }, tap = ::tapIntent)
+    }
+
+    override suspend fun stepUpPairing(): StepUpHost.Pairing? {
+        val r = store.read()
+        val origin = r.origin ?: return null
+        val token = r.token ?: return null
+        return StepUpHost.Pairing(origin, token, r.keyAlias, KeyKind.fromWire(r.keyKind) == KeyKind.BIOMETRIC_OR_CREDENTIAL)
+    }
+
+    override fun showOutcome(tag: String, title: String, path: String?, outcome: AskOutcome) =
+        notifier.showOutcome(tag, title, path, outcome)
 
     val pushHandler by lazy { PushHandler(notifier) }
 

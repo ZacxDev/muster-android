@@ -1,5 +1,6 @@
 package dev.zacx.muster.core.net
 
+import dev.zacx.muster.core.model.ActionId
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
@@ -139,7 +140,11 @@ class DeviceApi(
          */
         data object Revoked : Result<Nothing>
 
-        data class Failed(val status: Int, val message: String) : Result<Nothing>
+        /**
+         * Any other answer. [code] is muster's machine-readable refusal code
+         * (`challenge_expired`, `not_open`, …) when the body carries one, else "".
+         */
+        data class Failed(val status: Int, val message: String, val code: String = "") : Result<Nothing>
     }
 
     fun config(token: String): Result<Config> = call(token, Request.Builder().url(url("api/device/config")).get()) {
@@ -163,6 +168,57 @@ class DeviceApi(
     fun unpair(token: String): Result<Unit> =
         call(token, Request.Builder().url(url("api/device")).delete()) { }
 
+    // --- signed actions -----------------------------------------------------------
+
+    @Serializable
+    private data class ChallengeRequest(
+        val action: String,
+        val target: String,
+        @SerialName("text_sha256") val textSha256: String? = null,
+    )
+
+    /** A one-time challenge (single use, 2 minutes). [message] is what muster says to sign. */
+    @Serializable
+    data class Challenge(
+        val nonce: String,
+        @SerialName("expires_in") val expiresIn: Int = 0,
+        val message: String = "",
+    )
+
+    /**
+     * `POST /api/device/challenge`: a challenge bound to [action], [target]
+     * and, for an answer, the sha256 of its exact text
+     * ([DeviceActionMessage.textSha256]).
+     */
+    fun challenge(token: String, action: ActionId, target: String, textSha256: String?): Result<Challenge> {
+        requireSignedAsk(action, target)
+        val body = json.encodeToString(ChallengeRequest.serializer(), ChallengeRequest(action.wire, target, textSha256))
+        return call(token, Request.Builder().url(url("api/device/challenge")).post(body.toRequestBody(JSON))) {
+            json.decodeFromString(Challenge.serializer(), it)
+        }
+    }
+
+    @Serializable
+    private data class ActionRequest(val nonce: String, val signature: String, val answer: String? = null)
+
+    /**
+     * The signed ask action: `POST` [action]'s fixed route
+     * ([ActionId.route], `{id}` = [target]) with the challenge's nonce, the
+     * base64 DER signature and, for an answer, the exact answer text.
+     */
+    fun askAction(token: String, action: ActionId, target: String, nonce: String, signature: String, answer: String?): Result<Unit> {
+        requireSignedAsk(action, target)
+        require((action == ActionId.ASK_ANSWER) == (answer != null)) { "an answer carries its text; a dismiss none" }
+        val body = json.encodeToString(ActionRequest.serializer(), ActionRequest(nonce, signature, answer))
+        val path = action.route.removePrefix("/").replace("{id}", target)
+        return call(token, Request.Builder().url(url(path)).post(body.toRequestBody(JSON))) { }
+    }
+
+    private fun requireSignedAsk(action: ActionId, target: String) {
+        require(action == ActionId.ASK_ANSWER || action == ActionId.ASK_DISMISS) { "muster routes only the ask's signed actions" }
+        require(ASK_TARGET.matches(target)) { "an ask's id: decimal, no leading zeros" }
+    }
+
     private fun <T> call(token: String, b: Request.Builder, parse: (String) -> T): Result<T> {
         require(CredentialShape.ok(token)) { "not a device credential" }
         val req = b.header("Authorization", "Bearer $token").build()
@@ -183,7 +239,7 @@ class DeviceApi(
             r.code == 401 && errorOf(text) == DEVICE_TOKEN_REFUSAL -> Result.Revoked
             r.code in 200..299 -> runCatching { Result.Ok(parse(text)) }
                 .getOrElse { Result.Failed(r.code, "muster's answer could not be read") }
-            else -> Result.Failed(r.code, errorOf(text).ifEmpty { "muster answered ${r.code}" })
+            else -> Result.Failed(r.code, errorOf(text).ifEmpty { "muster answered ${r.code}" }, codeOf(text))
         }
     }
 
@@ -192,14 +248,18 @@ class DeviceApi(
     private fun errorOf(text: String): String =
         runCatching { json.decodeFromString(ErrorBody.serializer(), text).error }.getOrDefault("").take(300)
 
+    private fun codeOf(text: String): String =
+        runCatching { json.decodeFromString(ErrorBody.serializer(), text).code }.getOrDefault("").take(64)
+
     @Serializable
-    private data class ErrorBody(val error: String = "")
+    private data class ErrorBody(val error: String = "", val code: String = "")
 
     companion object {
         /** muster's internal/api DeviceTokenRefusal, exactly. */
         const val DEVICE_TOKEN_REFUSAL = "this route takes a paired device credential (mdv_…)"
 
         private val JSON = "application/json".toMediaType()
+        private val ASK_TARGET = Regex("^[1-9][0-9]{0,18}$")
         private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="stepup_cancel">Cancel</string>
+    <string name="stepup_busy">Finish the open confirmation first</string>
+
+    <!-- No UI of its own: only the system's unlock and BiometricPrompt show. -->
+    <style name="Theme.Muster.StepUp" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+        <item name="android:windowAnimationStyle">@null</item>
+    </style>
+</resources>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <!-- The invisible step-up activity: an ask button's PendingIntent
+             starts it directly (getActivity). Not exported: only this app's
+             own PendingIntents reach it. Its own task, out of recents, as the
+             Phase 0 spike (S3) ran it, but WITHOUT noHistory: a PIN key's
+             credential screen can stop the activity mid-prompt, and
+             noHistory would finish it there and lose the signature. The
+             activity finishes itself on every path. -->
+        <activity
+            android:name=".StepUpActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:launchMode="singleInstance"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Muster.StepUp" />
+    </application>
+</manifest>
