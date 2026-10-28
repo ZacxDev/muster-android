@@ -138,5 +138,24 @@ class AskButtonsTest {
         assertEquals("chief is asking", n.extras.getString(Notification.EXTRA_TITLE))
         assertEquals("Not sent: muster could not be reached. Tap the button again.", n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
         assertEquals(Channels.ASKS, n.channelId)
+        // Nothing was showing, so onlyAlertOnce has nothing to replace: it must be posted silent.
+        assertSilent(n)
+    }
+
+    /** A question settled elsewhere (a `resolved` push cancelled it) and nothing showing: no new notification. */
+    @Test
+    fun alreadySettledWithNothingShowingPostsNothing() {
+        push("""{"id":41,"options":["ship it"]}""", all)
+        notifier.withdraw(tag)
+        assertEquals(0, shadowOf(nm).activeNotifications.size)
+        notifier.showOutcome(tag, "chief is asking", "/attention/open/ask-41", AskOutcome.Gone("Already answered, dismissed or expired."))
+        assertEquals(0, shadowOf(nm).activeNotifications.size)
+    }
+
+    /** NotificationCompat.setSilent: a non-summary that only the (absent) summary may alert for. */
+    private fun assertSilent(n: Notification) {
+        assertEquals(Notification.GROUP_ALERT_SUMMARY, n.groupAlertBehavior)
+        assertEquals(0, n.flags and Notification.FLAG_GROUP_SUMMARY)
+        assertEquals(null, n.sound)
     }
 }

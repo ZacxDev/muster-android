@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import androidx.biometric.BiometricManager.Authenticators
 import androidx.biometric.BiometricPrompt
@@ -85,6 +86,20 @@ class StepUpActivity : FragmentActivity() {
             return
         }
         run(tap)
+    }
+
+    /**
+     * Another button tapped while this one's unlock or prompt is still up
+     * (singleInstance delivers it here, not to a new activity). The open
+     * attempt is kept and the new tap is refused, never queued: it sends
+     * nothing, and the user taps it again once the open one is done. Fails
+     * closed: no tap is ever sent without its own confirmation.
+     */
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (Tap.from(intent) != null) {
+            Toast.makeText(this, R.string.stepup_busy, Toast.LENGTH_SHORT).show()
+        }
     }
 
     private fun run(tap: Tap) {

@@ -35,7 +35,9 @@ import dev.zacx.muster.core.model.PayloadV2
  * - One notification per tag: a later push with the same tag replaces it, and
  *   a `resolved` withdrawal cancels it by tag, as the web worker does. A
  *   re-push marked `update` replaces it WITHOUT alerting again
- *   ([onlyAlertOnce]); a first push alerts.
+ *   ([onlyAlertOnce]); a first push alerts. An `update` re-push for a tag
+ *   with nothing showing (the user swiped the first away, or it was
+ *   withdrawn) is dropped: a question the user dismissed does not come back.
  * - [tap] builds the tap PendingIntent (immutable, explicit) for a path on
  *   the muster origin; the app module owns the activity it opens.
  */
@@ -59,8 +61,9 @@ class AndroidNotifier(
         ) {
             return
         }
-        Channels.ensure(context)
         val tag = tagOf(payload)
+        if (payload.update && active(tag) == null) return
+        Channels.ensure(context)
         val channel = Channels.forType(payload.type)
         val b = base(channel, payload)
             .setContentIntent(tap(tag, payload.path))
@@ -88,7 +91,9 @@ class AndroidNotifier(
      * [AskOutcome.Gone.message] and no buttons; [AskOutcome.Failed] keeps the
      * question AND its buttons, with the message above the question, so the
      * user can try again. Never alerts. When the notification is no longer
-     * showing, a new one says it (tapping it opens [path]).
+     * showing: a Gone outcome posts nothing (the question is settled and the
+     * user already let it go); a Failed one posts a SILENT notification that
+     * says it (tapping it opens [path]).
      */
     fun showOutcome(tag: String, title: String, path: String?, outcome: AskOutcome) {
         val nm = NotificationManagerCompat.from(context)
@@ -101,8 +106,8 @@ class AndroidNotifier(
             is AskOutcome.Failed -> outcome.message
             AskOutcome.Done -> return
         }
-        val shown = context.getSystemService(NotificationManager::class.java)
-            ?.activeNotifications?.firstOrNull { it.tag == tag && it.id == ID }?.notification
+        val shown = active(tag)
+        if (shown == null && outcome is AskOutcome.Gone) return
         // The body as muster sent it, never a previous outcome's text: two
         // failures in a row say the latest reason once.
         val question = shown?.extras?.getString(EXTRA_QUESTION)
@@ -115,10 +120,12 @@ class AndroidNotifier(
                 .setOnlyAlertOnce(true)
                 .build()
         } else {
-            // Gone (no buttons: the question cannot be acted on), or nothing
-            // showing any more: a new notification that says it. (A recovered
-            // builder cannot drop actions: build() keeps the old ones when
-            // the new list is empty.)
+            // Gone over a showing question (no buttons: it cannot be acted
+            // on), or a failure with nothing showing any more: a new
+            // notification that says it. Silent either way: with nothing
+            // showing, onlyAlertOnce has nothing to replace and would alert.
+            // (A recovered builder cannot drop actions: build() keeps the old
+            // ones when the new list is empty.)
             Channels.ensure(context)
             NotificationCompat.Builder(context, Channels.ASKS)
                 .setSmallIcon(R.drawable.ic_stat_muster)
@@ -129,6 +136,7 @@ class AndroidNotifier(
                 .setContentIntent(tap(tag, path))
                 .setAutoCancel(true)
                 .setOnlyAlertOnce(true)
+                .setSilent(true)
                 .build()
         }
         post(nm, tag, n)
@@ -147,6 +155,11 @@ class AndroidNotifier(
             // POST_NOTIFICATIONS was revoked between the check and the post.
         }
     }
+
+    /** The notification showing under [tag], or null. */
+    private fun active(tag: String): Notification? =
+        context.getSystemService(NotificationManager::class.java)
+            ?.activeNotifications?.firstOrNull { it.tag == tag && it.id == ID }?.notification
 
     override fun withdraw(tag: String) {
         NotificationManagerCompat.from(context).cancel(tag, ID)

@@ -68,6 +68,32 @@ class QuestionTextAndAlertTest {
         assertEquals(false, onlyAlertOnce(shown("attention-ask-42")))
     }
 
+    /**
+     * The user swiped the question away; the suggestions re-push (`update`)
+     * then arrives. It is dropped: nothing posted, so nothing alerts and the
+     * dismissed question does not come back.
+     */
+    @Test
+    fun anUpdateRePushAfterTheUserSwipedItAwayPostsNothing() {
+        push(ask(update = false))
+        assertEquals(1, shadowOf(nm).activeNotifications.size)
+        nm.cancel("attention-ask-41", AndroidNotifier.ID) // the user's swipe
+        push(ask(update = true))
+        assertEquals(0, shadowOf(nm).activeNotifications.size)
+    }
+
+    /** Control: the same re-push while the first is still showing updates it in place, without alerting. */
+    @Test
+    fun anUpdateRePushWhileItIsShowingUpdatesItInPlace() {
+        push(ask(update = false))
+        push(ask(update = true).replace("Options: ship it", "Options: ship it now"))
+        val all = shadowOf(nm).activeNotifications
+        assertEquals(1, all.size)
+        val n = all.single().notification
+        assertEquals(question.replace("Options: ship it", "Options: ship it now"), n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString())
+        assertEquals(true, onlyAlertOnce(n))
+    }
+
     /** The question and its options, whole: BigTextStyle, and public on the lock screen. */
     @Test
     fun aQuestionShowsItsWholeTextOnTheLockScreen() {
