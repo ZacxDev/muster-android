@@ -66,4 +66,19 @@ class PushHandlerTest {
         assertEquals(Outcome.SHOWN, handler.handle(show, true, true))
         assertEquals("/attention", sink.shown.single().path)
     }
+
+    /** A read-only phone (no step-up key) shows an ask's question with no buttons: each is a signed action. */
+    @Test
+    fun aPhoneWithoutAStepUpKeyGetsNoButtons() {
+        val ask = """{"v":2,"type":"attention","tag":"attention-ask-41","title":"chief is asking","body":"Ship it?",
+            "ask":{"id":41,"options":["ship it"]},"actions":[{"id":"ask_answer","target":"41","option":0},
+            {"id":"ask_dismiss","label":"Dismiss","target":"41"}]}""".encodeToByteArray()
+        assertEquals(Outcome.SHOWN, handler.handle(ask, decrypted = true, paired = true, canSign = false))
+        assertEquals(emptyList<String>(), sink.shown.single().ask!!.actions.map { it.label })
+        assertEquals("Ship it?", sink.shown.single().body)
+        // Control: with a key, the same push keeps its buttons.
+        val s = RecordingSink()
+        PushHandler(s).handle(ask, decrypted = true, paired = true, canSign = true)
+        assertEquals(listOf("ship it", "Dismiss"), s.shown.single().ask!!.buttons().map { it.label })
+    }
 }

@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import java.nio.ByteBuffer
 import java.nio.charset.CharacterCodingException
@@ -16,12 +17,15 @@ import java.nio.charset.CodingErrorAction
  *     {"v":2,"type":"review","id":"42","tag":"task-42",
  *      "title":"<WHO>","body":"<WHERE>","url":"/tasks/42"}
  *
- * IDS AND WHO/WHERE, NEVER WHAT. Title and body are WHO and WHERE; anything
- * longer is fetched later with the device credential.
+ * Title and body are the browser notification's own lines, cut. For most
+ * events that is WHO and WHERE (a waiting session included); for an ask and a
+ * held question they carry the question and its options (muster's operator
+ * decision "Full text always"). The app shows them as sent and adds nothing.
  *
- * Phase 1 reads `v`, `type`, `id`, `tag`, `title`, `body` and `url`. muster
- * sends no `actions`, `conv` or `state` yet; a field this phase does not know
- * is ignored, never acted on.
+ * The app reads `v`, `type`, `id`, `tag`, `title`, `body`, `url`, and for an
+ * `attention` ask `ask`, `actions` and `update` (muster docs/design/android.md,
+ * "The signed ask actions, as built"). `conv` and `state` are not sent yet; a
+ * field the app does not know is ignored, never acted on.
  */
 data class PayloadV2(
     val type: String,
@@ -31,6 +35,15 @@ data class PayloadV2(
     val body: String,
     /** A path on the muster origin ("/tasks/42"), or null. Never a full URL. */
     val path: String?,
+    /** An attention ask's chips and signed actions, or null (no buttons). */
+    val ask: AskPush? = null,
+    /**
+     * `update: true`: a re-push of a notification already shown under the
+     * same tag (an ask's suggested replies arrived). Replace it without
+     * alerting again. Anything but JSON `true` is false: alerting is the
+     * safe direction.
+     */
+    val update: Boolean = false,
 ) {
     companion object {
         /**
@@ -104,6 +117,7 @@ object PayloadV2Parser {
             if (e !is JsonPrimitive || !e.isString) return Push.Rejected("$k is not a string")
         }
         val id = str(obj, "id")?.takeIf { it.isNotEmpty() }
+        val update = (obj["update"] as? JsonPrimitive)?.takeIf { !it.isString }?.booleanOrNull == true
         val tag = str(obj, "tag")?.takeIf { it.isNotEmpty() }
         if ((id?.length ?: 0) > PayloadV2.MAX_ID || (tag?.length ?: 0) > PayloadV2.MAX_ID) {
             return Push.Rejected("id or tag too long")
@@ -117,7 +131,8 @@ object PayloadV2Parser {
                 val title = cut(str(obj, "title").orEmpty(), PayloadV2.MAX_TITLE)
                 val body = cut(str(obj, "body").orEmpty(), PayloadV2.MAX_BODY)
                 if (title.isBlank()) return Push.Rejected("no title")
-                Push.Show(PayloadV2(type, id, tag, title, body, MusterPath.parse(str(obj, "url"))))
+                val ask = if (type == AskPush.TYPE) AskPushParser.parse(obj["ask"], obj["actions"]) else null
+                Push.Show(PayloadV2(type, id, tag, title, body, MusterPath.parse(str(obj, "url")), ask, update))
             }
         }
     }

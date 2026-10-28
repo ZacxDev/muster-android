@@ -10,11 +10,13 @@ The design is muster's
 [`docs/design/android.md`](https://github.com/ZacxDev/muster/blob/main/docs/design/android.md).
 This repo follows it.
 
-**Status: Phase 1** (shell and push). The app hosts muster's web UI, pairs
-with muster for a device credential and a biometric step-up key, and shows
-muster's push notifications through UnifiedPush. It has no action buttons
-yet: signed actions are Phase 2. Phase 0's spike results are in
-[`docs/phase0-results.md`](docs/phase0-results.md).
+**Status: Phase 1** (shell and push), **plus the first Phase 2 piece: an
+ask's signed buttons.** The app hosts muster's web UI, pairs with muster for a
+device credential and a biometric step-up key, and shows muster's push
+notifications through UnifiedPush. An agent's question (an attention ask) gets
+buttons that answer or dismiss it, each confirmed with the step-up key (below).
+Inline reply and the other signed actions are still to come. Phase 0's spike
+results are in [`docs/phase0-results.md`](docs/phase0-results.md).
 
 ### What Phase 1 does
 
@@ -95,9 +97,31 @@ yet: signed actions are Phase 2. Phase 0's spike results are in
   `up*` topics, so the app drops every message it could not decrypt before
   reading it. Then payload v2 (at most 3993 bytes, one 4096-byte encrypted
   record) is parsed strictly.
-- **Notifications:** WHO and WHERE only, `VISIBILITY_PRIVATE` with a public
-  version, on the Asks and approvals or Tasks channel; `resolved` cancels by
-  tag. POST_NOTIFICATIONS is asked for right after pairing.
+- **Notifications:** muster's own lines, drawn whole (BigTextStyle): WHO and
+  WHERE for most events, a waiting session's summary line included; the
+  question and its options for an ask or a held question, on the lock screen
+  too (muster's operator decision "Full text always"). An ask is
+  `VISIBILITY_PUBLIC`; everything else is `VISIBILITY_PRIVATE` with a public
+  version of the same lines. On the Asks and approvals or Tasks channel;
+  `resolved` cancels by tag; a re-push marked `update` (an ask's suggested
+  replies arriving) replaces the notification without alerting again.
+  POST_NOTIFICATIONS is asked for right after pairing.
+- **An ask's buttons (signed actions):** payload v2's `actions` name each chip
+  (the asker's options, then the suggested replies) by index into `ask`; the
+  app draws at most three buttons: the first two chips and **Dismiss**. A tap
+  opens the invisible step-up activity (`PendingIntent.getActivity`, straight
+  to it): from the lock screen it asks for the unlock first, then
+  `POST /api/device/challenge`, then a BiometricPrompt whose description is
+  the exact answer, signing `muster-device-action-v1` / nonce / action / ask
+  id / the answer's sha256 with the step-up key (a strong biometric, or the
+  PIN for a biometric-or-PIN key). Nothing is sent without that confirmation.
+  The app builds the signed message itself and refuses a challenge whose
+  message differs. A refusal (an expired challenge, a 4xx, no network) is
+  written into the notification, buttons kept so the user can tap again; a
+  question already answered or gone loses its buttons and says so; a sent one
+  is removed. A phone paired read-only gets no buttons. The inline-reply
+  Answer is not drawn yet (it needs the held-reply flow); tapping the
+  notification still opens the question's page.
 - **Phone settings** (long-press the launcher icon): pairing, step-up key,
   push state, unpair.
 - **Opening (0.1.2):** the launcher shows the home page's last frame until
@@ -153,7 +177,7 @@ The browser may ask you to sign in to muster there.
 
 ### Not in Phase 1
 
-Signed actions and inline reply (Phase 2), bubbles (Phase 3), widgets and live
+Inline reply and the signed actions other than an ask's (Phase 2), bubbles (Phase 3), widgets and live
 status (Phase 4), the in-app updater and the update channel (Phase 5). No
 release has been published.
 
@@ -172,12 +196,12 @@ release has been published.
 |---|---|
 | `app` | the application: manifest, the launcher activity (server URL, shell, phone settings), the UnifiedPush service, wiring |
 | `core/model` | pure Kotlin: payload v2 and its parser, the action-id table, the action policy, the attachment gate |
-| `core/net` | pure Kotlin: the `/api/device/...` client (OkHttp, no redirects) |
+| `core/net` | pure Kotlin: the `/api/device/...` client (OkHttp, no redirects), the signed message and the challenge → action flow |
 | `core/auth` | pairing, the step-up key and its policy, the sealed credential store |
 | `feature/shell` | the WebView: origin policy, navigation, bridge, insets, pull to refresh |
 | `feature/push` | the push handler (decrypted-only), the push-host check, registration |
 | `feature/notify` | channels and drawing notifications |
-| `feature/stepup` | the invisible step-up activity (Phase 2; a stub) |
+| `feature/stepup` | the invisible step-up activity: unlock, challenge, BiometricPrompt, the signed ask action |
 
 The rest of the design's layout (`core/data`, `bubble`, `widget`, `live`,
 `update`, `build-logic`) arrives with the phase that needs it.

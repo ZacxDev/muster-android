@@ -24,8 +24,8 @@ class MusterPushService : PushService() {
     override fun onMessage(message: PushMessage, instance: String) {
         // The record read is short and local; the outcome must be decided
         // before onMessage returns (the connector holds a wake lock until then).
-        val paired = runBlocking { app.store.read().paired }
-        val outcome = app.pushHandler.handle(message.content, message.decrypted, paired)
+        val record = runBlocking { app.store.read() }
+        val outcome = app.pushHandler.handle(message.content, message.decrypted, record.paired, canSign = record.keyAlias != null)
         Log.i(TAG, "push: $outcome")
         // A notification the user may tap: start Chromium now, in this
         // already-running process, so the tap opens a warm shell.
