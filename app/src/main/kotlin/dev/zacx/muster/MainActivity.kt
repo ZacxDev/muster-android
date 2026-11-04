@@ -83,8 +83,8 @@ class MainActivity : ComponentActivity() {
     /** Bumped by every showShell: a WebView attach posted for an older shell does nothing. */
     private var shellGeneration = 0
 
-    /** The ONE back callback, registered once in onCreate (ShellBack). */
-    private val back = ShellBack { webView }
+    /** The ONE back callback, registered once in onCreate (ShellBack); a press the page declines goes on to the system. */
+    private val back = ShellBack({ webView }, { onBackPressedDispatcher.onBackPressed() })
 
     /** The page's pending file request: answered exactly once, null if cancelled or replaced. */
     private var pendingFiles: ((List<Uri>?) -> Unit)? = null
@@ -226,7 +226,7 @@ class MainActivity : ComponentActivity() {
         StartupProbe.attach(wv, p.allowedOriginRule)
         page.addView(ShellRefreshLayout(this, wv), 0, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         webView = wv
-        back.sync()
+        back.onWebViewChanged()
         StartupProbe.mark("webview.loadUrl")
         wv.loadUrl(target)
         if (record.paired) refreshPush(registerIfNeeded = record.pushStatus != PushStatus.REGISTERED)
@@ -239,6 +239,7 @@ class MainActivity : ComponentActivity() {
                     is BridgeMessage.Pair -> confirmPairing(p.allowedOriginRule, message.code, message.expiresAt)
                     BridgeMessage.OpenNotificationSettings -> openNotificationSettings()
                     is BridgeMessage.TouchStart -> webView?.let(ShellRefreshLayout::of)?.onProbe(message)
+                    is BridgeMessage.BackClaim -> back.claim(message.open)
                     is BridgeMessage.Refused -> Unit
                 }
             }
@@ -261,7 +262,7 @@ class MainActivity : ComponentActivity() {
                 if (webView === view) {
                     webView = null
                     policy = null
-                    back.sync()
+                    back.onWebViewChanged()
                     lifecycleScope.launch { route(intent) }
                 }
             }
@@ -292,7 +293,11 @@ class MainActivity : ComponentActivity() {
 
         override fun onPageEvent(view: WebView, event: ShellWebView.PageEvent, url: String) {
             StartupProbe.page(view, event, url)
-            if (view === webView) onPageMilestone(view, event, url)
+            if (view === webView) {
+                // A page start ends the dock's back claim (ShellBack.onPageEvent).
+                back.onPageEvent(event)
+                onPageMilestone(view, event, url)
+            }
             // The first muster page on screen is "fully drawn" for the system's
             // startup metrics (logcat "Fully drawn", am start -W); once per activity.
             if (event == ShellWebView.PageEvent.COMMIT_VISIBLE && !reportedDrawn) {
@@ -302,7 +307,8 @@ class MainActivity : ComponentActivity() {
         }
 
         override fun onHistoryChanged() {
-            runOnUiThread { back.sync() }
+            // Keeps the back claim: the view swap's replaceState happens with the dock open.
+            runOnUiThread { back.onHistoryChanged() }
         }
 
         override fun onBlockedAttachment() {
@@ -532,7 +538,7 @@ class MainActivity : ComponentActivity() {
         }
         webView = null
         policy = null
-        back.sync()
+        back.onWebViewChanged()
     }
 
     companion object {

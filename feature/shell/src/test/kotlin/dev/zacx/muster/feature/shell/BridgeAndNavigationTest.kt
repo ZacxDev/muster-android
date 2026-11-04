@@ -46,6 +46,33 @@ class BridgeAndNavigationTest {
         assertTrue(parse("""{"type":"pair","code":"$code","pad":"${"x".repeat(1100)}"}""") is BridgeMessage.Refused)
     }
 
+    /** The switcher dock's claim on back (muster docs/design/switcher-dock.md, "The shell change"). */
+    @Test
+    fun backClaimIsUnderstood() {
+        assertEquals(BridgeMessage.BackClaim(true), parse("""{"type":"back-claim","open":true}"""))
+        assertEquals(BridgeMessage.BackClaim(false), parse("""{"type":"back-claim","open":false}"""))
+    }
+
+    /** `open` is a JSON boolean or the message is refused. */
+    @Test
+    fun backClaimWithoutABooleanIsRefused() {
+        listOf(""""yes"""", """"true"""", "1", "null").forEach { v ->
+            assertEquals(v, BridgeMessage.Refused("back-claim without a boolean open"), parse("""{"type":"back-claim","open":$v}"""))
+        }
+        assertEquals(BridgeMessage.Refused("back-claim without a boolean open"), parse("""{"type":"back-claim"}"""))
+    }
+
+    /** Invariant guard: the frame, origin and size checks come before the type, unchanged. */
+    @Test
+    fun backClaimFromASubframeOrTooLongIsRefused() {
+        val msg = """{"type":"back-claim","open":true}"""
+        assertEquals(BridgeMessage.Refused("not the main frame"), parse(msg, main = false))
+        assertEquals(BridgeMessage.Refused("wrong origin"), parse(msg, src = "https://evil.example.test"))
+        val long = """{"type":"back-claim","open":true,"pad":"${"x".repeat(1100)}"}"""
+        assertTrue(long.length > BridgeMessage.MAX_LEN)
+        assertEquals(BridgeMessage.Refused("no message"), parse(long))
+    }
+
     @Test
     fun navigation() {
         assertEquals(Verdict.WEBVIEW, ShellNavigation.decide("https://m.example.test/attention", policy))

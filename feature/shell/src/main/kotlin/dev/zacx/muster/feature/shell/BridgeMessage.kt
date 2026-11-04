@@ -14,10 +14,15 @@ import java.time.format.DateTimeParseException
  * "The shell"). Each is a JSON string. The bridge never carries a credential
  * from the app to the page.
  *
- * The app understands the two messages muster's pages send:
+ * The app understands the three messages muster's pages send:
  *
  *     {"type":"pair","code":"mdp_…","expires_at":"2026-10-21T12:00:00Z"}
  *     {"type":"open-notification-settings"}
+ *     {"type":"back-claim","open":true}
+ *
+ * (the last when muster's switcher dock opens, `"open":false` when it closes;
+ * `open` is a JSON boolean or the message is refused; muster
+ * docs/design/switcher-dock.md, "The shell change")
  *
  * and one the app's own document-start script sends from muster's pages
  * (PullProbeScript; scroll geometry, which gesture it is, and whether text
@@ -40,6 +45,12 @@ sealed interface BridgeMessage {
      * ([PullGate]): the [seq]th gesture that started in the document [doc].
      */
     data class TouchStart(val doc: String, val seq: Long, val probe: PullGate.Probe) : BridgeMessage
+
+    /**
+     * muster's switcher dock opened ([open] true) or closed: while it is
+     * open, back is offered to the page first ([ShellBack]).
+     */
+    data class BackClaim(val open: Boolean) : BridgeMessage
 
     data class Refused(val reason: String) : BridgeMessage
 
@@ -79,6 +90,11 @@ sealed interface BridgeMessage {
                     Pair(code, exp)
                 }
                 "open-notification-settings" -> OpenNotificationSettings
+                "back-claim" -> when ((obj["open"] as? JsonPrimitive)?.takeIf { !it.isString }?.content) {
+                    "true" -> BackClaim(true)
+                    "false" -> BackClaim(false)
+                    else -> Refused("back-claim without a boolean open")
+                }
                 PullProbeScript.MESSAGE_TYPE -> touchStart(obj)
                 else -> Refused("unknown message")
             }
