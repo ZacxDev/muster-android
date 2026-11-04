@@ -174,6 +174,102 @@ class ShellBackTest {
         assertEquals(0, systemBacks)
     }
 
+    /**
+     * 🔴 A second press on a hung page decides the first with the fallback
+     * before it is handled, so the first falls back no later than its own
+     * deadline: two presses 200 ms apart are two goBacks at 200 ms, and the
+     * first press's cancelled timeout adds nothing at 300 ms.
+     */
+    @Test
+    fun aSecondPressOnAHungPageDecidesTheFirstByItsDeadline() {
+        shadowOf(wv).setCanGoBack(true)
+        back.claim(true)
+        pressBack()
+        advance(200)
+        assertEquals(0, shadowOf(wv).goBackInvocations)
+        pressBack()
+        assertEquals("the first press's fallback, then the second press unclaimed", 2, shadowOf(wv).goBackInvocations)
+        advance(ShellBack.CLAIM_TIMEOUT_MS - 200 + 1) // past the first press's deadline
+        assertEquals(2, shadowOf(wv).goBackInvocations)
+        advance(ShellBack.CLAIM_TIMEOUT_MS)
+        assertEquals(2, shadowOf(wv).goBackInvocations)
+        assertFalse(back.claimed)
+        assertEquals(0, systemBacks)
+    }
+
+    /** The same at the start of history: the first press's fallback is the system's back, once. */
+    @Test
+    fun aSecondPressOnAHungPageWithNoHistoryGoesToTheSystemOnce() {
+        shadowOf(wv).setCanGoBack(false)
+        back.claim(true)
+        pressBack()
+        advance(200)
+        pressBack()
+        assertEquals(1, systemBacks)
+        advance(ShellBack.CLAIM_TIMEOUT_MS * 2)
+        assertEquals(1, systemBacks)
+        assertEquals(0, shadowOf(wv).goBackInvocations)
+    }
+
+    /**
+     * 🔴 The audit's probe: 12 presses 250 ms apart on a hung page. Every press
+     * after the first decides the one before it, so Back fires in every 300 ms
+     * window: goBack counts sampled after each press are 0, 2, 3, … 12.
+     */
+    @Test
+    fun rapidPressesOnAHungPageNeverLoseBack() {
+        shadowOf(wv).setCanGoBack(true)
+        back.claim(true)
+        val counts = mutableListOf<Int>()
+        repeat(12) { i ->
+            if (i > 0) advance(250)
+            pressBack()
+            counts += shadowOf(wv).goBackInvocations
+        }
+        assertEquals(listOf(0) + (2..12).toList(), counts)
+        advance(ShellBack.CLAIM_TIMEOUT_MS * 2)
+        assertEquals(12, shadowOf(wv).goBackInvocations)
+        assertEquals(0, systemBacks)
+    }
+
+    /**
+     * 🔴 The renderer dies while a press waits on the page: the press is
+     * dropped with its timeout, so the app does not leave (no system back)
+     * and nothing goes back; a late answer from the dead page is ignored.
+     */
+    @Test
+    fun aReplacedWebViewDropsThePendingPress() {
+        shadowOf(wv).setCanGoBack(false)
+        back.claim(true)
+        pressBack()
+        val pageAnswer = shadowOf(wv).lastEvaluatedJavascriptCallback
+        advance(100)
+        back.onWebViewChanged()
+        advance(ShellBack.CLAIM_TIMEOUT_MS * 2)
+        pageAnswer.onReceiveValue("false")
+        assertEquals(0, systemBacks)
+        assertEquals(0, shadowOf(wv).goBackInvocations)
+    }
+
+    /**
+     * 🔴 A page starts while a press waits on the old one: the press is dropped
+     * with its timeout, so the new document is not sent back.
+     */
+    @Test
+    fun aPageStartDropsThePendingPress() {
+        configureShell()
+        shadowOf(wv).setCanGoBack(true)
+        back.claim(true)
+        pressBack()
+        val pageAnswer = shadowOf(wv).lastEvaluatedJavascriptCallback
+        advance(100)
+        shadowOf(wv).webViewClient.onPageStarted(wv, "https://m.example.test/b", null)
+        advance(ShellBack.CLAIM_TIMEOUT_MS * 2)
+        pageAnswer.onReceiveValue("false")
+        assertEquals(0, shadowOf(wv).goBackInvocations)
+        assertEquals(0, systemBacks)
+    }
+
     /** Every main-frame page start, a reload included, ends the claim. */
     @Test
     fun aPageStartClearsTheClaim() {

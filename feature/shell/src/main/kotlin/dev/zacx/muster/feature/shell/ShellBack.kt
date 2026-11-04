@@ -20,13 +20,15 @@ import androidx.activity.OnBackPressedCallback
  * or none within [CLAIM_TIMEOUT_MS] (a hung page never answers), clears the
  * claim and falls back to what back does without one: `goBack()` if it can,
  * else the press goes to the system ([toSystem]). Whichever comes first, the
- * answer or the timeout, decides the press, once. So a stale or hung claim
- * delays one press by at most [CLAIM_TIMEOUT_MS]; it never takes it away.
+ * answer, the timeout, or the next press (which decides it with the fallback
+ * before being handled itself), decides the press, once. So a stale or hung
+ * claim delays one press by at most [CLAIM_TIMEOUT_MS]; it never takes it away.
  *
  * The claim ends on every main-frame page start ([onPageEvent]) and when the
  * WebView is replaced or its renderer is gone ([onWebViewChanged]), but NOT
  * on a history change ([onHistoryChanged]): muster's view swap calls
- * `history.replaceState` while the dock can be open.
+ * `history.replaceState` while the dock can be open. Where it ends that way, a
+ * press still waiting on the old page is dropped, with its timeout.
  *
  * @param toSystem re-dispatches a press the page declined, once this callback
  *   is disabled (MainActivity: `onBackPressedDispatcher.onBackPressed()`).
@@ -43,6 +45,9 @@ class ShellBack(
     /** The press the page has been asked about, until the answer or the timeout decides it. */
     private var pending: Any? = null
 
+    /** [pending]'s posted fallback, removed whenever [pending] is decided or dropped. */
+    private var pendingTimeout: Runnable? = null
+
     fun claim(open: Boolean) {
         claimed = open
         sync()
@@ -54,26 +59,46 @@ class ShellBack(
 
     /** Every main-frame page start, a reload included, is a new document: no dock is open in it. */
     fun onPageEvent(event: ShellWebView.PageEvent) {
-        if (event == ShellWebView.PageEvent.STARTED) claim(false) else sync()
+        if (event == ShellWebView.PageEvent.STARTED) reset() else sync()
     }
 
     /** A history change re-syncs and keeps the claim (the view swap's replaceState). */
     fun onHistoryChanged() = sync()
 
     /** A new WebView, none, or a dead renderer: whatever claimed back is gone. */
-    fun onWebViewChanged() = claim(false)
+    fun onWebViewChanged() = reset()
+
+    /**
+     * The document or WebView that claimed back is gone: the claim ends, and a
+     * press still waiting on it is dropped, not decided. Its fallback would act
+     * on what replaced it (goBack on the new document, or the system's back
+     * when the renderer died), and its answer, if one still comes, is ignored.
+     */
+    private fun reset() {
+        dropPending()
+        claim(false)
+    }
+
+    private fun dropPending() {
+        pendingTimeout?.let(handler::removeCallbacks)
+        pendingTimeout = null
+        pending = null
+    }
 
     override fun handleOnBackPressed() {
+        // A press still waiting on the page is decided now with the fallback,
+        // before this one: on a hung page presses closer together than
+        // CLAIM_TIMEOUT_MS would otherwise keep superseding each other and
+        // Back would never fire. This press then sees the claim that leaves.
+        pending?.let { decide(it, closed = false) }
         val v = webView()
         if (claimed && v != null) {
             val press = Any()
             pending = press
             val timeout = Runnable { decide(press, closed = false) }
+            pendingTimeout = timeout
             handler.postDelayed(timeout, CLAIM_TIMEOUT_MS)
-            v.evaluateJavascript(SCRIPT) { result ->
-                handler.removeCallbacks(timeout)
-                decide(press, closed = result == "true")
-            }
+            v.evaluateJavascript(SCRIPT) { result -> decide(press, closed = result == "true") }
             return
         }
         if (v != null && v.canGoBack()) v.goBack()
@@ -83,7 +108,7 @@ class ShellBack(
     /** Decides [press] once; an answer or timeout for an already decided press does nothing. */
     private fun decide(press: Any, closed: Boolean) {
         if (pending !== press) return
-        pending = null
+        dropPending()
         if (closed) return sync() // the dock closed; the page posts back-claim false itself
         claimed = false
         val v = webView()
