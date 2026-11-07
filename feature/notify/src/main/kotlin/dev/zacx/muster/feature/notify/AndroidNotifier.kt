@@ -40,9 +40,18 @@ import dev.zacx.muster.core.model.PayloadV2
  *   withdrawn) is dropped: a question the user dismissed does not come back.
  * - [tap] builds the tap PendingIntent (immutable, explicit) for a path on
  *   the muster origin; the app module owns the activity it opens.
+ * - 🔴 One notifier per muster server ([tenant]; muster
+ *   docs/design/multi-tenant.md, "Notifications, taps and deep links"): every
+ *   notification carries that server's label as its subtext (on the lock
+ *   screen too) and its colour, posts to that server's channels in its
+ *   channel group, and is tagged `<tenant>:<server tag>`, so equal tags from
+ *   two servers never replace each other. The app builds [tap] and [action]
+ *   for this tenant only, so a tap opens this server and a button signs for
+ *   it, never for "the current one".
  */
 class AndroidNotifier(
     private val context: Context,
+    val tenant: NotifyTenant,
     /** An ask button's PendingIntent; null draws no buttons. */
     private val action: ActionIntents? = null,
     private val tap: (tag: String, path: String?) -> PendingIntent,
@@ -61,14 +70,14 @@ class AndroidNotifier(
         ) {
             return
         }
-        val tag = tagOf(payload)
+        val tag = tenant.namespace(tagOf(payload))
         // An update with nothing showing (the user swiped the first away, or
         // the first push never arrived) is posted SILENT: onlyAlertOnce only
         // quiets a notification that is still showing, and dropping it instead
         // would lose a question whose first push was lost.
         val silent = payload.update && active(tag) == null
-        Channels.ensure(context)
-        val channel = Channels.forType(payload.type)
+        Channels.ensure(context, tenant)
+        val channel = tenant.channel(Channels.forType(payload.type))
         val b = base(channel, payload)
             .setSilent(silent)
             .setContentIntent(tap(tag, payload.path))
@@ -91,7 +100,8 @@ class AndroidNotifier(
     }
 
     /**
-     * What a tapped button came to, shown in the notification under [tag]:
+     * What a tapped button came to, shown in the notification under [tag]
+     * (the namespaced tag the button was built with):
      * [AskOutcome.Done] removes it; [AskOutcome.Gone] keeps the question with
      * [AskOutcome.Gone.message] and no buttons; [AskOutcome.Failed] keeps the
      * question AND its buttons, with the message above the question, so the
@@ -131,9 +141,11 @@ class AndroidNotifier(
             // showing, onlyAlertOnce has nothing to replace and would alert.
             // (A recovered builder cannot drop actions: build() keeps the old
             // ones when the new list is empty.)
-            Channels.ensure(context)
-            NotificationCompat.Builder(context, Channels.ASKS)
+            Channels.ensure(context, tenant)
+            NotificationCompat.Builder(context, tenant.channel(Channels.ASKS))
                 .setSmallIcon(R.drawable.ic_stat_muster)
+                .setSubText(tenant.label)
+                .setColor(tenant.colour)
                 .setContentTitle(title)
                 .setContentText(message)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(text))
@@ -166,16 +178,33 @@ class AndroidNotifier(
         context.getSystemService(NotificationManager::class.java)
             ?.activeNotifications?.firstOrNull { it.tag == tag && it.id == ID }?.notification
 
-    override fun withdraw(tag: String) {
-        NotificationManagerCompat.from(context).cancel(tag, ID)
+    /**
+     * muster withdrew [serverTag] (`resolved`): clears this tenant's
+     * notification under it. The legacy tenant also clears the bare tag, for
+     * a notification drawn before the upgrade.
+     */
+    override fun withdraw(serverTag: String) {
+        val nm = NotificationManagerCompat.from(context)
+        nm.cancel(tenant.namespace(serverTag), ID)
+        if (tenant.legacy) nm.cancel(serverTag, ID)
+    }
+
+    /** The tenant was removed: every notification of its is cleared. */
+    fun cancelAll() {
+        val nm = context.getSystemService(NotificationManager::class.java) ?: return
+        val prefix = tenant.namespace("")
+        nm.activeNotifications.filter { it.id == ID && it.tag?.startsWith(prefix) == true }.forEach { nm.cancel(it.tag, ID) }
     }
 
     private fun base(channel: String, p: PayloadV2) = NotificationCompat.Builder(context, channel)
         .setSmallIcon(R.drawable.ic_stat_muster)
+        // Which server: on the notification and on its lock-screen public version.
+        .setSubText(tenant.label)
+        .setColor(tenant.colour)
         .setContentTitle(p.title)
         .setContentText(p.body)
         .setStyle(NotificationCompat.BigTextStyle().bigText(p.body))
-        .setCategory(if (channel == Channels.ASKS) Notification.CATEGORY_REMINDER else Notification.CATEGORY_STATUS)
+        .setCategory(if (channel == tenant.channel(Channels.ASKS)) Notification.CATEGORY_REMINDER else Notification.CATEGORY_STATUS)
         .setOnlyAlertOnce(onlyAlertOnce(p))
 
     companion object {
@@ -191,6 +220,7 @@ class AndroidNotifier(
          */
         fun onlyAlertOnce(p: PayloadV2): Boolean = p.update
 
+        /** The server's tag for [p] (namespaced per tenant by [NotifyTenant.namespace] before posting). */
         fun tagOf(p: PayloadV2): String = p.tag ?: "muster:${p.type}:${p.id ?: p.title.hashCode()}"
     }
 }

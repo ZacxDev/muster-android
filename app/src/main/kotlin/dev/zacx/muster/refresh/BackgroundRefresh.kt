@@ -14,6 +14,7 @@ import dev.zacx.muster.feature.push.PushRegistrar
 import dev.zacx.muster.feature.shell.WebViewPrewarm
 import dev.zacx.muster.push.MusterPushService
 import dev.zacx.muster.shell.ShellLocalState
+import dev.zacx.muster.tenants.refreshAllTenants
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.concurrent.TimeUnit
@@ -28,7 +29,7 @@ import java.util.concurrent.TimeUnit
  * the background. So no job can make the PAGE fresher while the app is
  * closed. What one can do:
  *
- * 1. **Keep the pairing current**: read `/api/device/config` with the device
+ * 1. **Keep the pairings current**: read each paired server's `/api/device/config` with its device
  *    credential (one small GET), so a pairing muster ended is forgotten and
  *    its push registration dropped while the app is closed.
  * 2. **Keep Chromium warm**: start the WebView provider in this process
@@ -102,8 +103,13 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         val app = MusterApp.from(applicationContext)
         app.local.pruneStale()
         val outcome = BackgroundRefresh(
-            refreshConfig = { app.registrar.refreshConfig() },
-            onRevoked = { runCatching { MusterPushService.unregister(applicationContext) } },
+            // Every paired server, each on its own; a revoked one drops its own push instance.
+            refreshConfig = {
+                refreshAllTenants(app.tenants.read(), { t -> app.registrarFor(t.id).refreshConfig() }) { t ->
+                    runCatching { MusterPushService.unregister(applicationContext, t.pushInstance) }
+                }
+            },
+            onRevoked = {},
             onNotPaired = { app.local.cancelRefresh() },
             prewarm = { prewarmAndWait(applicationContext) },
         ).run()

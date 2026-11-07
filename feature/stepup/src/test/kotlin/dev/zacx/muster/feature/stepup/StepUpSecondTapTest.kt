@@ -22,8 +22,8 @@ import org.robolectric.shadows.ShadowToast
 class PendingHostApp : Application(), StepUpHost {
     val outcomes = mutableListOf<Pair<String, AskOutcome>>()
     private val never = CompletableDeferred<StepUpHost.Pairing?>()
-    override suspend fun stepUpPairing(): StepUpHost.Pairing? = never.await()
-    override fun showOutcome(tag: String, title: String, path: String?, outcome: AskOutcome) {
+    override suspend fun stepUpPairing(tenant: String): StepUpHost.Pairing? = never.await()
+    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome) {
         outcomes += tag to outcome
     }
 }
@@ -39,7 +39,7 @@ class StepUpSecondTapTest {
     private val app: PendingHostApp = ApplicationProvider.getApplicationContext()
 
     private fun tapIntent(tag: String, a: AskAction) =
-        shadowOf(StepUpActivity.pendingIntent(app, tag, 0, "chief is asking", null, a)).savedIntent
+        shadowOf(StepUpActivity.pendingIntent(app, "t1", tag, 0, "chief is asking", null, a)).savedIntent
 
     @Test
     fun aSecondTapWhileOneIsOpenIsRefusedAndSendsNothing() {

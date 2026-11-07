@@ -9,24 +9,34 @@ import androidx.work.Configuration
 import androidx.work.WorkManager
 import dev.zacx.muster.core.auth.AesGcmAead
 import dev.zacx.muster.core.auth.DataStoreDeviceStore
+import dev.zacx.muster.core.auth.DataStoreTenantsFile
+import dev.zacx.muster.core.auth.DeviceRecord
 import dev.zacx.muster.core.auth.DeviceStore
 import dev.zacx.muster.core.auth.KeyKind
 import dev.zacx.muster.core.auth.KeystoreStepUpKeys
 import dev.zacx.muster.core.auth.Pairing
 import dev.zacx.muster.core.auth.StepUpKeys
+import dev.zacx.muster.core.auth.TenantRecord
+import dev.zacx.muster.core.auth.TenantRepository
 import dev.zacx.muster.core.model.AskOutcome
 import dev.zacx.muster.core.net.DeviceApi
 import dev.zacx.muster.feature.notify.AndroidNotifier
 import dev.zacx.muster.feature.notify.Channels
-import dev.zacx.muster.feature.push.PushHandler
 import dev.zacx.muster.feature.push.PushRegistrar
+import dev.zacx.muster.feature.push.TenantPushRouter
+import dev.zacx.muster.feature.shell.TenantSessions
+import dev.zacx.muster.feature.shell.WebViewProfiles
 import dev.zacx.muster.feature.stepup.StepUpActivity
 import dev.zacx.muster.feature.stepup.StepUpHost
+import dev.zacx.muster.push.MusterPushService
 import dev.zacx.muster.shell.ShellLocalState
 import dev.zacx.muster.shell.ShellSnapshot
+import dev.zacx.muster.tenants.TenantOps
+import dev.zacx.muster.tenants.notifyTenant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 
@@ -41,79 +51,128 @@ class MusterApp : Application(), Configuration.Provider, StepUpHost {
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    val store: DeviceStore by lazy {
-        // noBackupFilesDir: never part of Auto Backup, whatever the rules say.
-        DataStoreDeviceStore(File(noBackupFilesDir, "device.sealed"), AesGcmAead.androidKeystore(), scope)
+    private val aead by lazy { AesGcmAead.androidKeystore() }
+
+    /**
+     * Every muster server this phone is paired with (core/auth Tenants), in
+     * noBackupFilesDir: never part of Auto Backup, whatever the rules say. The
+     * single-server `device.sealed` is read once, migrated into tenant
+     * "default", and deleted; nothing writes it.
+     */
+    val tenants: TenantRepository by lazy {
+        val legacy = File(noBackupFilesDir, "device.sealed")
+        TenantRepository(
+            DataStoreTenantsFile(File(noBackupFilesDir, "tenants.sealed"), aead, scope),
+            readLegacy = { if (legacy.exists()) DataStoreDeviceStore(legacy, aead, scope).read() else DeviceRecord() },
+            deleteLegacy = { withContext(Dispatchers.IO) { legacy.delete() } },
+        )
     }
+
+    /** Tenant [id]'s pairing, and nothing else. */
+    fun store(id: String): DeviceStore = tenants.deviceStore(id)
 
     val keys: StepUpKeys by lazy { KeystoreStepUpKeys(this) }
 
-    val notifier by lazy {
-        AndroidNotifier(this, action = { tag, i, title, path, a -> StepUpActivity.pendingIntent(this, tag, i, title, path, a) }, tap = ::tapIntent)
-    }
+    /** Each tenant's pages in its own WebView profile (feature/shell TenantSessions). */
+    val profiles by lazy { WebViewProfiles() }
+    val sessions by lazy { TenantSessions(profiles) }
 
-    override suspend fun stepUpPairing(): StepUpHost.Pairing? {
-        val r = store.read()
+    /** Tenant [t]'s notifier: its label and colour on every notification, its taps and buttons for it only. */
+    fun notifierFor(t: TenantRecord) = AndroidNotifier(
+        this,
+        t.notifyTenant(),
+        action = { tag, i, title, path, a -> StepUpActivity.pendingIntent(this, t.id, tag, i, title, path, a) },
+        tap = { tag, path -> tapPendingIntent(this, t.id, tag, path) },
+    )
+
+    override suspend fun stepUpPairing(tenant: String): StepUpHost.Pairing? {
+        val r = tenants.read().byId(tenant)?.device ?: return null
         val origin = r.origin ?: return null
         val token = r.token ?: return null
         return StepUpHost.Pairing(origin, token, r.keyAlias, KeyKind.fromWire(r.keyKind) == KeyKind.BIOMETRIC_OR_CREDENTIAL)
     }
 
-    override fun showOutcome(tag: String, title: String, path: String?, outcome: AskOutcome) =
-        notifier.showOutcome(tag, title, path, outcome)
+    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome) {
+        scope.launch {
+            val t = tenants.read().byId(tenant) ?: return@launch
+            notifierFor(t).showOutcome(tag, title, path, outcome)
+        }
+    }
 
-    val pushHandler by lazy { PushHandler(notifier) }
+    val pushRouter by lazy { TenantPushRouter(::notifierFor) }
 
     /** The shell's picture and background job, and when they go ([ShellLocalState]). */
     val local by lazy { ShellLocalState(ShellSnapshot(noBackupFilesDir), { WorkManager.getInstance(this) }) }
 
-    val registrar by lazy { newRegistrar(store, ::DeviceApi, { a -> keys.delete(a) }, local) }
+    /** Tenant [id]'s push registrar: reads and writes that tenant's pairing only. */
+    fun registrarFor(id: String) = newRegistrar(
+        store(id), ::DeviceApi, { a -> keys.delete(a) }, local,
+        stillPaired = { tenants.read().all.any { it.id != id && it.device.paired } },
+    )
 
-    fun pairing(origin: String) = Pairing(DeviceApi(origin), keys, store)
+    /** Pairing into tenant [id], against its own origin. */
+    fun pairing(id: String, origin: String) = Pairing(DeviceApi(origin), keys, store(id))
+
+    val ops by lazy {
+        TenantOps(
+            tenants, sessions, { profiles.multiProfile }, ::DeviceApi, { a -> keys.delete(a) },
+            unregisterPush = { instance -> MusterPushService.unregister(this, instance) },
+            dropNotifications = { t -> notifierFor(t).cancelAll(); Channels.delete(this, t.notifyTenant()) },
+            local = local,
+        )
+    }
 
     override fun onCreate() {
         StartupProbe.mark("app.onCreate.start")
         super.onCreate()
-        Channels.ensure(this)
+        // Each tenant's channels (in its group) are created when the tenants
+        // are first read (MainActivity) and before every post (AndroidNotifier).
         StartupProbe.mark("app.onCreate.end")
     }
 
-    private fun tapIntent(tag: String, path: String?): PendingIntent = tapPendingIntent(this, tag, path)
-
     companion object {
+        /** The tap intent's extra naming its tenant. */
+        const val EXTRA_TENANT = "dev.zacx.muster.TENANT"
+
         /**
-         * A notification tap: open the shell at [path], immutable and explicit.
-         * The tag goes into the intent's DATA as well as the request code:
+         * A notification tap: open tenant [tenant]'s shell at [path], immutable
+         * and explicit. The tenant and tag go into the intent's DATA
+         * (`muster-tap://<tenant>/<tag>`) as well as the request code:
          * PendingIntents are told apart by request code AND Intent.filterEquals
          * (which ignores extras), so two tags whose hash codes collide
-         * ("Aa" and "BB") would otherwise share one PendingIntent, and
-         * FLAG_UPDATE_CURRENT would make the first notification open the
-         * second one's path.
+         * ("Aa" and "BB"), or equal tags from two servers, would otherwise
+         * share one PendingIntent, and FLAG_UPDATE_CURRENT would make the first
+         * notification open the second one's path (or server).
          */
-        fun tapPendingIntent(context: Context, tag: String, path: String?): PendingIntent {
+        fun tapPendingIntent(context: Context, tenant: String, tag: String, path: String?): PendingIntent {
             val i = Intent(context, MainActivity::class.java)
-                .setData(android.net.Uri.fromParts("muster-tap", tag, null))
+                .setData(android.net.Uri.Builder().scheme("muster-tap").authority(tenant).appendPath(tag).build())
+                .putExtra(EXTRA_TENANT, tenant)
                 .putExtra(MainActivity.EXTRA_PATH, path)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            return PendingIntent.getActivity(context, tag.hashCode(), i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+            return PendingIntent.getActivity(
+                context, 31 * tenant.hashCode() + tag.hashCode(), i, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
         }
 
         fun from(c: Context) = c.applicationContext as MusterApp
 
         /**
-         * The push registrar, wired so that muster ending the pairing (a 401
-         * seen in the foreground, by the background job or at push
-         * registration) deletes the step-up key and forgets the shell's
-         * picture and job ([ShellLocalState.forget]) before the call returns.
+         * One tenant's push registrar, wired so that muster ending that
+         * pairing (a 401 seen in the foreground, by the background job or at
+         * push registration) deletes its step-up key and forgets the shell's
+         * picture and, unless another tenant is still paired ([stillPaired]),
+         * the job ([ShellLocalState.forget]) before the call returns.
          */
         fun newRegistrar(
             store: DeviceStore,
             api: (String) -> DeviceApi,
             deleteKey: (String) -> Unit,
             local: ShellLocalState,
+            stillPaired: suspend () -> Boolean = { false },
         ) = PushRegistrar(store, api, onForget = { old ->
             old.keyAlias?.let { a -> withContext(Dispatchers.IO) { runCatching { deleteKey(a) } } }
-            local.forget()
+            local.forget(cancelRefresh = !stillPaired())
         })
 
         fun deviceName(): String = listOf(Build.MANUFACTURER, Build.MODEL)

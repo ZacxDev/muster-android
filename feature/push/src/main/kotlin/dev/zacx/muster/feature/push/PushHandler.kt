@@ -19,7 +19,8 @@ import dev.zacx.muster.core.model.PayloadV2Parser
  */
 class PushHandler(private val sink: NotificationSink) {
 
-    enum class Outcome { DROPPED_UNDECRYPTED, DROPPED_UNPAIRED, REJECTED, PROBE, SHOWN, WITHDRAWN }
+    /** [DROPPED_UNKNOWN_TENANT]: the push came in on a UnifiedPush instance no tenant owns ([TenantPushRouter]). */
+    enum class Outcome { DROPPED_UNDECRYPTED, DROPPED_UNKNOWN_TENANT, DROPPED_UNPAIRED, REJECTED, PROBE, SHOWN, WITHDRAWN }
 
     /**
      * [canSign]: this pairing has a step-up key. A read-only phone shows an

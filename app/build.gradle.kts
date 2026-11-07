@@ -13,8 +13,8 @@ android {
         applicationId = "dev.zacx.muster"
         minSdk = 30
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.1.5"
+        versionCode = 8
+        versionName = "0.2.0"
     }
 
     buildTypes {
@@ -66,4 +66,10 @@ dependencies {
     testImplementation(libs.androidx.work.testing)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.okhttp.mockwebserver)
+
+    // The switcher's Compose tests (src/testDebug) on Robolectric. The test
+    // manifest's empty activity is DEBUG only: the release APK never has it.
+    testImplementation(platform(libs.compose.bom))
+    testDebugImplementation(libs.compose.ui.test.junit4)
+    debugImplementation(libs.compose.ui.test.manifest)
 }

@@ -15,7 +15,8 @@ ask's signed buttons.** The app hosts muster's web UI, pairs with muster for a
 device credential and a biometric step-up key, and shows muster's push
 notifications through UnifiedPush. An agent's question (an attention ask) gets
 buttons that answer or dismiss it, each confirmed with the step-up key (below).
-Inline reply and the other signed actions are still to come. Phase 0's spike
+Inline reply and the other signed actions are still to come. **Since 0.2.0 it
+can be paired with several muster servers at once** (below). Phase 0's spike
 results are in [`docs/phase0-results.md`](docs/phase0-results.md).
 
 ### What Phase 1 does
@@ -126,8 +127,9 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   is removed. A phone paired read-only gets no buttons. The inline-reply
   Answer (`input`) is ignored like an unknown action (it needs the held-reply
   flow, not built); tapping the notification still opens the question's page.
-- **Phone settings** (long-press the launcher icon): pairing, step-up key,
-  push state, unpair.
+- **Phone settings** (long-press the launcher icon, or long-press the server
+  switcher): the muster servers, and for each its pairing, step-up key, push
+  state, unpair and remove.
 - **Opening (0.1.2):** the launcher shows the home page's last frame until
   the live page paints over it. The frame is a JPEG of the board, so it is a
   new copy of board text at rest: app-private, in `noBackupFilesDir` (never
@@ -155,6 +157,56 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   cold-start phase in ms since the process started, and the page's
   Navigation and Paint Timing. Every build reports "Fully drawn" when the
   first muster page is on screen.
+
+### Several muster servers (0.2.0)
+
+The app can be paired with more than one muster server at once: a separate
+muster deployment at its own URL, with its own account. The design is muster's
+[`docs/design/multi-tenant.md`](https://github.com/ZacxDev/muster/blob/main/docs/design/multi-tenant.md),
+phase 3. Nothing on the server changes.
+
+- **Adding a server:** the switcher's **Add server** asks for the other
+  server's `https://` address, then opens it in the shell. Sign in there, open
+  Account → Devices and tap **Pair this phone**: the usual pairing, which gives
+  that server its own device credential and step-up key. A pairing code pairs
+  only the server whose page sent it (the bridge's origin selects the server),
+  and two servers never share an origin. A second server needs an Android
+  System WebView with profiles (`MULTI_PROFILE`); on an older one the app asks
+  you to update it and keeps the first server working.
+- **The switcher:** a bar above the page shows the server in view, by colour
+  and label (its host). Tap it for the list of servers, **Add server** and
+  **Manage servers**; pick another server to switch. A long press opens
+  server management. The server in view is kept across restarts.
+- **Separate sign-ins:** each server's pages load in its own WebView profile
+  (own cookies, storage and service workers), so switching never carries one
+  server's session to another, and switching back finds it still signed in.
+  The server that was there before the upgrade keeps the default profile, and
+  so its sign-in.
+- **Notifications from every server:** each server registers its own
+  UnifiedPush instance (the pre-upgrade server keeps instance `default`, so
+  its registration keeps delivering with no re-registration). Every
+  notification shows its server's label as its subtext, on the lock screen
+  too, and its colour. Each server has its own channel group (mute one server
+  in system settings); the pre-upgrade server keeps the `asks` and `tasks`
+  channel ids and their settings. Tags are `<server>:<tag>`, so the same ask
+  number on two servers is two notifications. A tap switches to that server
+  and opens the item there; an ask's button is signed with that server's
+  step-up key and sent to that server only, never to the server in view.
+- **Manage servers:** each server's phone settings (pairing, step-up key,
+  push, unpair), and **Remove this server**, which ends the pairing on that
+  server (`DELETE /api/device`, best effort), drops its push registration,
+  step-up key, sign-in, notifications and channels, and touches no other
+  server.
+- **Upgrade:** on the first start of 0.2.0 the existing pairing becomes the
+  first server, with nothing re-paired. The servers live in `tenants.sealed`
+  (sealed like the credential, under the same Keystore key); the old
+  `device.sealed` is read once for that and then deleted, so no second copy
+  of the credential stays on disk. There is no downgrade path: Android
+  refuses a lower versionCode over a release build, and an uninstall wipes
+  the app's data.
+  Ask buttons on notifications drawn by 0.1.5 stop working after the
+  upgrade (they carry no server, so they are refused and send nothing):
+  dismiss those notifications; new ones work.
 
 ### 🔴 Uploaded files
 
@@ -201,9 +253,9 @@ release has been published.
 | `app` | the application: manifest, the launcher activity (server URL, shell, phone settings), the UnifiedPush service, wiring |
 | `core/model` | pure Kotlin: payload v2 and its parser, the action-id table, the action policy, the attachment gate |
 | `core/net` | pure Kotlin: the `/api/device/...` client (OkHttp, no redirects), the signed message and the challenge → action flow |
-| `core/auth` | pairing, the step-up key and its policy, the sealed credential store |
-| `feature/shell` | the WebView: origin policy, navigation, bridge, insets, pull to refresh |
-| `feature/push` | the push handler (decrypted-only), the push-host check, registration |
+| `core/auth` | pairing, the step-up key and its policy, the sealed credential store, the muster servers (`Tenants`: one pairing each) |
+| `feature/shell` | the WebView: origin policy, navigation, bridge, insets, pull to refresh, one WebView profile per server |
+| `feature/push` | the push handler (decrypted-only), which server a push is for, the push-host check, registration |
 | `feature/notify` | channels and drawing notifications |
 | `feature/stepup` | the invisible step-up activity: unlock, challenge, BiometricPrompt, the signed ask action |
 

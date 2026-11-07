@@ -12,4 +12,8 @@
     <string name="unpaired">This phone is unpaired.</string>
     <string name="config_failed">muster did not answer this phone: %1$s. It stays paired.</string>
     <string name="attachment_blocked">Attachments do not open in the app yet.</string>
+    <string name="url_invalid">Enter an https:// address, with no user name or password.</string>
+    <string name="webview_update_title">Update Android System WebView</string>
+    <string name="webview_update">A second muster server needs a newer Android System WebView, so that each server keeps its own sign-in. Update it from your app store, then add the server again. This server keeps working.</string>
+    <string name="server_removed">Removed %1$s from this phone.</string>
 </resources>

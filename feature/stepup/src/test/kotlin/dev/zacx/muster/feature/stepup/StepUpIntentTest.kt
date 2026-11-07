@@ -34,7 +34,7 @@ class StepUpIntentTest {
 
     @Test
     fun aButtonIsAnImmutableActivityIntentStraightToTheStepUpActivity() {
-        val pi = StepUpActivity.pendingIntent(app, "attention-ask-41", 0, "chief is asking", "/attention/open/ask-41", answer)
+        val pi = StepUpActivity.pendingIntent(app, "t1", "attention-ask-41", 0, "chief is asking", "/attention/open/ask-41", answer)
         val s = shadowOf(pi)
         assertTrue(s.isActivityIntent)
         assertFalse(s.isBroadcastIntent)
@@ -44,7 +44,7 @@ class StepUpIntentTest {
 
         val tap = StepUpActivity.Tap.from(s.savedIntent)
         assertEquals(
-            StepUpActivity.Tap("attention-ask-41", "chief is asking", "/attention/open/ask-41", AskRequest(ActionId.ASK_ANSWER, "41", "ship it")),
+            StepUpActivity.Tap("t1", "attention-ask-41", "chief is asking", "/attention/open/ask-41", AskRequest(ActionId.ASK_ANSWER, "41", "ship it")),
             tap,
         )
     }
@@ -53,9 +53,9 @@ class StepUpIntentTest {
     @Test
     fun noTwoButtonsShareAPendingIntent() {
         assertEquals("Aa".hashCode(), "BB".hashCode())
-        val a0 = StepUpActivity.pendingIntent(app, "Aa", 0, "t", null, answer)
-        val a1 = StepUpActivity.pendingIntent(app, "Aa", 1, "t", null, dismiss)
-        val b0 = StepUpActivity.pendingIntent(app, "BB", 0, "t", null, dismiss)
+        val a0 = StepUpActivity.pendingIntent(app, "t1", "Aa", 0, "t", null, answer)
+        val a1 = StepUpActivity.pendingIntent(app, "t1", "Aa", 1, "t", null, dismiss)
+        val b0 = StepUpActivity.pendingIntent(app, "t1", "BB", 0, "t", null, dismiss)
         assertNotEquals(a0, a1)
         assertNotEquals(a0, b0)
         assertEquals("ship it", StepUpActivity.Tap.from(shadowOf(a0).savedIntent)!!.request.answer)
@@ -72,11 +72,13 @@ class StepUpIntentTest {
 
     @Test
     fun aMalformedTapIsRefused() {
-        val good = shadowOf(StepUpActivity.pendingIntent(app, "attention-ask-41", 0, "t", null, answer)).savedIntent
+        val good = shadowOf(StepUpActivity.pendingIntent(app, "t1", "attention-ask-41", 0, "t", null, answer)).savedIntent
         assertNull(StepUpActivity.Tap.from(null))
         assertNull(StepUpActivity.Tap.from(good.cloneFilter().apply { putExtras(good); removeExtra(StepUpActivity.EXTRA_ANSWER) }))
         assertNull(StepUpActivity.Tap.from(good.cloneFilter().apply { putExtras(good); putExtra(StepUpActivity.EXTRA_ACTION, "queue_send_now") }))
         assertNull(StepUpActivity.Tap.from(good.cloneFilter().apply { putExtras(good); removeExtra(StepUpActivity.EXTRA_TAG) }))
+        // No tenant: refused, never resolved to "the current server".
+        assertNull(StepUpActivity.Tap.from(good.cloneFilter().apply { putExtras(good); removeExtra(StepUpActivity.EXTRA_TENANT) }))
     }
 
     /** The prompt repeats the EXACT answer: what the key signs is what the user saw. */

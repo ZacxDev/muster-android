@@ -38,10 +38,16 @@ interface StepUpHost {
         val keyTakesPin: Boolean,
     )
 
-    /** null when the phone is not paired. */
-    suspend fun stepUpPairing(): Pairing?
+    /**
+     * 🔴 Tenant [tenant]'s pairing (muster docs/design/multi-tenant.md: "a
+     * button carries the tenant, and the step-up activity uses only that
+     * tenant's pairing"), never the tenant in view. null when that tenant is
+     * gone or not paired.
+     */
+    suspend fun stepUpPairing(tenant: String): Pairing?
 
-    fun showOutcome(tag: String, title: String, path: String?, outcome: AskOutcome)
+    /** Shows [outcome] in tenant [tenant]'s notification under [tag]. */
+    fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome)
 }
 
 /**
@@ -107,7 +113,7 @@ class StepUpActivity : FragmentActivity() {
         started = true
         val host = application as? StepUpHost ?: return finish()
         lifecycleScope.launch {
-            val pairing = host.stepUpPairing()
+            val pairing = host.stepUpPairing(tap.tenant)
             val alias = pairing?.keyAlias
             if (pairing == null || alias == null) {
                 done(host, tap, AskOutcome.Failed(if (pairing == null) SignedAsk.REVOKED else SignedAsk.READ_ONLY))
@@ -189,26 +195,29 @@ class StepUpActivity : FragmentActivity() {
     }
 
     private fun done(host: StepUpHost, tap: Tap, outcome: AskOutcome) {
-        host.showOutcome(tap.tag, tap.title, tap.path, outcome)
+        host.showOutcome(tap.tenant, tap.tag, tap.title, tap.path, outcome)
         finish()
     }
 
-    /** One button's tap, as the notification's PendingIntent carries it. */
-    internal data class Tap(val tag: String, val title: String, val path: String?, val request: AskRequest) {
+    /** One button's tap, as the notification's PendingIntent carries it; [tenant] is the server it came from. */
+    internal data class Tap(val tenant: String, val tag: String, val title: String, val path: String?, val request: AskRequest) {
         companion object {
             fun from(i: Intent?): Tap? {
                 i ?: return null
+                // No tenant, no tap: a button never falls back to "the current server".
+                val tenant = i.getStringExtra(EXTRA_TENANT)?.takeIf { it.isNotEmpty() } ?: return null
                 val tag = i.getStringExtra(EXTRA_TAG)?.takeIf { it.isNotEmpty() } ?: return null
                 val action = ActionId.fromWire(i.getStringExtra(EXTRA_ACTION) ?: return null) ?: return null
                 val target = i.getStringExtra(EXTRA_TARGET) ?: return null
                 val answer = i.getStringExtra(EXTRA_ANSWER)
                 val request = runCatching { AskRequest(action, target, answer) }.getOrNull() ?: return null
-                return Tap(tag, i.getStringExtra(EXTRA_TITLE).orEmpty(), i.getStringExtra(EXTRA_PATH), request)
+                return Tap(tenant, tag, i.getStringExtra(EXTRA_TITLE).orEmpty(), i.getStringExtra(EXTRA_PATH), request)
             }
         }
     }
 
     companion object {
+        internal const val EXTRA_TENANT = "dev.zacx.muster.stepup.TENANT"
         internal const val EXTRA_TAG = "dev.zacx.muster.stepup.TAG"
         internal const val EXTRA_TITLE = "dev.zacx.muster.stepup.TITLE"
         internal const val EXTRA_PATH = "dev.zacx.muster.stepup.PATH"
@@ -224,15 +233,16 @@ class StepUpActivity : FragmentActivity() {
         fun promptDescription(r: AskRequest): String = r.answer ?: "Dismiss without answering."
 
         /**
-         * Button [index] of the notification under [tag]: `getActivity`
-         * STRAIGHT to this activity, immutable and explicit. The tag and the
-         * index go into the intent's DATA, so no two buttons (of one
-         * notification, or of two whose tags' hash codes collide) share a
-         * PendingIntent and its extras.
+         * Button [index] of tenant [tenant]'s notification under [tag]:
+         * `getActivity` STRAIGHT to this activity, immutable and explicit. The
+         * tenant, the tag and the index go into the intent's DATA, so no two
+         * buttons (of one notification, of two whose tags' hash codes collide,
+         * or of two servers) share a PendingIntent and its extras.
          */
-        fun pendingIntent(context: Context, tag: String, index: Int, title: String, path: String?, a: AskAction): PendingIntent {
+        fun pendingIntent(context: Context, tenant: String, tag: String, index: Int, title: String, path: String?, a: AskAction): PendingIntent {
             val i = Intent(context, StepUpActivity::class.java)
-                .setData(Uri.Builder().scheme("muster-action").opaquePart(tag).fragment(index.toString()).build())
+                .setData(Uri.Builder().scheme("muster-action").opaquePart("$tenant/$tag").fragment(index.toString()).build())
+                .putExtra(EXTRA_TENANT, tenant)
                 .putExtra(EXTRA_TAG, tag)
                 .putExtra(EXTRA_TITLE, title)
                 .putExtra(EXTRA_PATH, path)
@@ -242,7 +252,7 @@ class StepUpActivity : FragmentActivity() {
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
             return PendingIntent.getActivity(
                 context,
-                31 * tag.hashCode() + index,
+                31 * (31 * tenant.hashCode() + tag.hashCode()) + index,
                 i,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
