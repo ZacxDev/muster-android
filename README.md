@@ -197,10 +197,13 @@ phase 3. Nothing on the server changes.
   server (`DELETE /api/device`, best effort), drops its push registration,
   step-up key, sign-in, notifications and channels, and touches no other
   server.
-- **Upgrade and rollback:** the existing pairing becomes the first server
-  with nothing re-paired. The servers live in `tenants.sealed` (sealed like
-  the credential, under the same Keystore key); `device.sealed` stays a v1
-  copy of the pre-upgrade server, so a downgraded app keeps working for it.
+- **Upgrade:** on the first start of 0.2.0 the existing pairing becomes the
+  first server, with nothing re-paired. The servers live in `tenants.sealed`
+  (sealed like the credential, under the same Keystore key); the old
+  `device.sealed` is read once for that and then deleted, so no second copy
+  of the credential stays on disk. There is no downgrade path: Android
+  refuses a lower versionCode over a release build, and an uninstall wipes
+  the app's data.
 
 ### 🔴 Uploaded files
 

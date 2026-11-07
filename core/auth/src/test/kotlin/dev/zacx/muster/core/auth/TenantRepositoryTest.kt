@@ -5,11 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
-import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -46,19 +44,23 @@ class TenantRepositoryTest {
 
     private var ids = 0
 
-    /** One "process": a repository over the two files; the stores are closed after [block]. */
-    private fun <T> open(block: suspend (TenantRepository, DeviceStore) -> T): T = runBlocking {
+    private var legacyReads = 0
+
+    /** One "process": a repository over the files, wired as the app wires it; the stores are closed after [block]. */
+    private fun <T> open(block: suspend (TenantRepository, File) -> T): T = runBlocking {
         val job = SupervisorJob()
         try {
             val scope = CoroutineScope(Dispatchers.IO + job)
-            val legacy = DataStoreDeviceStore(deviceFile, AesGcmAead { k }, scope)
             val repo = TenantRepository(
                 DataStoreTenantsFile(tenantsFile, AesGcmAead { k }, scope),
-                legacy,
-                legacyDigest = { TenantRepository.fileDigest(deviceFile) },
+                readLegacy = {
+                    legacyReads++
+                    if (deviceFile.exists()) DataStoreDeviceStore(deviceFile, AesGcmAead { k }, scope).read() else DeviceRecord()
+                },
+                deleteLegacy = { deviceFile.delete() },
                 newId = { "t" + (++ids) },
             )
-            block(repo, legacy)
+            block(repo, deviceFile)
         } finally {
             job.cancelAndJoin()
         }
@@ -74,23 +76,13 @@ class TenantRepositoryTest {
         }
     }
 
-    /** What an app before multi-tenant reads from device.sealed (AAD v1 only). */
-    private fun oldAppReads(): DeviceRecord = runBlocking {
-        val job = SupervisorJob()
-        try {
-            DataStoreDeviceStore(deviceFile, AesGcmAead { k }, CoroutineScope(Dispatchers.IO + job)).read()
-        } finally {
-            job.cancelAndJoin()
-        }
-    }
-
     // --- migration -----------------------------------------------------------------------
 
-    /** The upgrade: today's sealed pairing becomes tenant "default", current, with nothing re-paired and device.sealed untouched. */
+    /** The upgrade: today's sealed pairing becomes tenant "default", current, with nothing re-paired; then device.sealed is deleted. */
     @Test
     fun theExistingPairingMigratesIntoTenantDefault() {
         oldAppWrites(paired)
-        val before = deviceFile.readBytes()
+        assertTrue(deviceFile.exists())
 
         val t = open { repo, _ -> repo.read() }
 
@@ -102,8 +94,8 @@ class TenantRepositoryTest {
         assertEquals(Tenants.DEFAULT, d.pushInstance) // the pre-upgrade UnifiedPush instance
         assertEquals(Tenants.DEFAULT, t.current)
         assertTrue(t.migrated)
-        assertArrayEquals("device.sealed must be left byte for byte", before, deviceFile.readBytes())
-        assertEquals("an older app still reads it", paired, oldAppReads())
+        assertFalse("no second copy of the credential stays on disk", deviceFile.exists())
+        assertEquals("and it survives the restart from tenants.sealed alone", paired, open { repo, _ -> repo.read() }.byId(Tenants.DEFAULT)!!.device)
     }
 
     @Test
@@ -119,9 +111,40 @@ class TenantRepositoryTest {
     fun theMigrationRunsOnce() {
         oldAppWrites(paired)
         open { repo, _ -> repo.add(originB, multiProfile = true); repo.remove(Tenants.DEFAULT) }
+        val reads = legacyReads
         val t = open { repo, _ -> repo.read() }
         assertEquals(listOf("t1"), t.all.map { it.id })
-        assertEquals("removing tenant default empties device.sealed", DeviceRecord(), oldAppReads())
+        assertEquals("a later start never reads the single-server file again", reads, legacyReads)
+    }
+
+    /**
+     * Killed after writing the list but before deleting device.sealed: the
+     * next start deletes it, does not migrate it a second time, and so cannot
+     * bring back a pairing changed or removed since.
+     */
+    @Test
+    fun aDeviceSealedLeftByAKillIsDeletedNotMigratedAgain() {
+        oldAppWrites(paired)
+        open { repo, _ -> repo.updateDevice(Tenants.DEFAULT) { it.copy(token = tokenA2) } }
+        oldAppWrites(paired) // the file as it was before the migration's delete
+        val t = open { repo, _ -> repo.read() }
+        assertEquals(tokenA2, t.byId(Tenants.DEFAULT)!!.device.token)
+        assertFalse(deviceFile.exists())
+    }
+
+    /** Nothing writes device.sealed after the migration: not a change to tenant default, not its removal. */
+    @Test
+    fun nothingWritesDeviceSealedAfterTheMigration() {
+        oldAppWrites(paired)
+        open { repo, _ ->
+            repo.read()
+            assertFalse(deviceFile.exists())
+            repo.updateDevice(Tenants.DEFAULT) { it.copy(token = tokenA2) }
+            assertFalse(deviceFile.exists())
+            repo.add(originB, multiProfile = true)
+            repo.remove(Tenants.DEFAULT)
+            assertFalse(deviceFile.exists())
+        }
     }
 
     // --- add, select, remove, persist -------------------------------------------------------
@@ -201,81 +224,13 @@ class TenantRepositoryTest {
         assertEquals(setOf(originA, originB), t.all.map { it.origin }.toSet())
     }
 
-    // --- device.sealed stays a v1 copy of tenant default --------------------------------------
-
-    /** A change to tenant default (a rotated credential) is in device.sealed, readable by an older app. */
+    /** A tenants.sealed that cannot be opened (the Keystore key is gone) reads as no servers: the credentials cannot be recovered. */
     @Test
-    fun aChangeToTenantDefaultIsWrittenToDeviceSealedAsV1() {
-        oldAppWrites(paired)
-        open { repo, _ -> repo.updateDevice(Tenants.DEFAULT) { it.copy(token = tokenA2) } }
-        assertEquals(paired.copy(token = tokenA2), oldAppReads())
-        // A change to another tenant never touches it.
-        val bytes = deviceFile.readBytes()
-        open { repo, _ -> repo.add(originB, multiProfile = true); repo.updateDevice("t1") { it.copy(token = tokenB) } }
-        assertArrayEquals(bytes, deviceFile.readBytes())
-    }
-
-    /**
-     * Killed between the two writes (device.sealed has the rotated credential,
-     * tenants.sealed does not): the restart keeps the NEW credential and
-     * changes no other tenant.
-     */
-    @Test
-    fun aKillBetweenTheTwoWritesKeepsTheNewCredential() {
-        oldAppWrites(paired)
-        open { repo, _ -> repo.add(originB, multiProfile = true); repo.updateDevice("t1") { it.copy(token = tokenB, deviceId = 9) } }
-        val other = open { repo, _ -> repo.read().byId("t1") }
-        oldAppWrites(paired.copy(token = tokenA2)) // write 1 of 2, then the kill
-
-        val t = open { repo, _ -> repo.read() }
-        assertEquals(tokenA2, t.byId(Tenants.DEFAULT)!!.device.token)
-        assertEquals(other, t.byId("t1"))
-        assertEquals("t1", t.current)
-    }
-
-    /** Control: device.sealed matching the recorded digest changes nothing; the list is authoritative. */
-    @Test
-    fun aMatchingDeviceSealedChangesNothing() {
-        oldAppWrites(paired)
-        open { repo, _ -> repo.update { t -> t.copy(all = t.all.map { it.copy(label = "renamed") }) } }
-        val t = open { repo, _ -> repo.read() }
-        assertEquals("renamed", t.byId(Tenants.DEFAULT)!!.label)
-        assertEquals(paired, t.byId(Tenants.DEFAULT)!!.device)
-    }
-
-    /** Control: an older app's change to device.sealed (after a downgrade) is taken. */
-    @Test
-    fun anOlderAppsChangeIsTaken() {
-        oldAppWrites(paired)
-        open { repo, _ -> repo.read() }
-        oldAppWrites(paired.unpaired()) // the old app unpaired
-        assertFalse(open { repo, _ -> repo.read() }.byId(Tenants.DEFAULT)!!.device.paired)
-    }
-
-    /** An older app re-paired tenant default to another tenant's server: refused, never two tenants on one origin. */
-    @Test
-    fun anOlderAppsRepairToAnotherTenantsOriginIsRefused() {
-        oldAppWrites(paired)
-        open { repo, _ -> repo.add(originB, multiProfile = true); repo.updateDevice("t1") { it.copy(token = tokenB) } }
-        oldAppWrites(DeviceRecord(origin = originB, token = "mdv_" + "X".repeat(43), deviceId = 77))
-
-        val t = open { repo, _ -> repo.read() }
-        assertEquals(listOf(originA, originB), t.all.map { it.origin })
-        assertFalse(t.byId(Tenants.DEFAULT)!!.device.paired)
-        assertEquals(tokenB, t.byId("t1")!!.device.token)
-        assertNotNull(t.notice)
-        assertEquals("device.sealed is a copy of tenant default again", t.byId(Tenants.DEFAULT)!!.device, oldAppReads())
-        open { repo, _ -> repo.clearNotice() }
-        assertNull(open { repo, _ -> repo.read() }.notice)
-    }
-
-    /** A tenants.sealed that cannot be opened (the Keystore key is gone) starts over from device.sealed, under the same key. */
-    @Test
-    fun anUnreadableListStartsOverFromDeviceSealed() {
+    fun anUnreadableListReadsAsNoServers() {
         oldAppWrites(paired)
         open { repo, _ -> repo.read() }
         tenantsFile.writeBytes(byteArrayOf(1, 2, 3))
-        assertEquals(paired, open { repo, _ -> repo.read() }.byId(Tenants.DEFAULT)!!.device)
+        assertEquals(emptyList<TenantRecord>(), open { repo, _ -> repo.read() }.all)
     }
 
     @Test

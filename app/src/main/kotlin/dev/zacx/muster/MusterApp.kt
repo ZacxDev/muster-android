@@ -10,6 +10,7 @@ import androidx.work.WorkManager
 import dev.zacx.muster.core.auth.AesGcmAead
 import dev.zacx.muster.core.auth.DataStoreDeviceStore
 import dev.zacx.muster.core.auth.DataStoreTenantsFile
+import dev.zacx.muster.core.auth.DeviceRecord
 import dev.zacx.muster.core.auth.DeviceStore
 import dev.zacx.muster.core.auth.KeyKind
 import dev.zacx.muster.core.auth.KeystoreStepUpKeys
@@ -53,17 +54,17 @@ class MusterApp : Application(), Configuration.Provider, StepUpHost {
     private val aead by lazy { AesGcmAead.androidKeystore() }
 
     /**
-     * Every muster server this phone is paired with (core/auth Tenants). Both
-     * files are in noBackupFilesDir: never part of Auto Backup, whatever the
-     * rules say. `device.sealed` stays a v1 copy of tenant "default", so a
-     * downgraded app keeps working for it.
+     * Every muster server this phone is paired with (core/auth Tenants), in
+     * noBackupFilesDir: never part of Auto Backup, whatever the rules say. The
+     * single-server `device.sealed` is read once, migrated into tenant
+     * "default", and deleted; nothing writes it.
      */
     val tenants: TenantRepository by lazy {
         val legacy = File(noBackupFilesDir, "device.sealed")
         TenantRepository(
             DataStoreTenantsFile(File(noBackupFilesDir, "tenants.sealed"), aead, scope),
-            DataStoreDeviceStore(legacy, aead, scope),
-            legacyDigest = { withContext(Dispatchers.IO) { TenantRepository.fileDigest(legacy) } },
+            readLegacy = { if (legacy.exists()) DataStoreDeviceStore(legacy, aead, scope).read() else DeviceRecord() },
+            deleteLegacy = { withContext(Dispatchers.IO) { legacy.delete() } },
         )
     }
 

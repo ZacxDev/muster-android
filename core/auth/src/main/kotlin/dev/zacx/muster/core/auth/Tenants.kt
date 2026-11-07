@@ -22,7 +22,6 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.URI
 import java.security.GeneralSecurityException
-import java.security.MessageDigest
 import java.security.SecureRandom
 
 /**
@@ -56,16 +55,8 @@ data class Tenants(
     /** The tenant in view, or null when there is none. Kept across restarts. */
     val current: String? = null,
     val all: List<TenantRecord> = emptyList(),
-    /**
-     * SHA-256 (hex) of the `device.sealed` bytes this app last wrote or
-     * accepted; a different file at start is a change an older app made
-     * ([TenantRepository]).
-     */
-    @SerialName("device_digest") val deviceDigest: String? = null,
     /** False until the single-server record has been migrated in, once. */
     val migrated: Boolean = false,
-    /** Something the user must be told once (an older version paired tenant default to another tenant's server). */
-    val notice: String? = null,
 ) {
     fun byId(id: String?): TenantRecord? = all.firstOrNull { it.id == id }
 
@@ -172,8 +163,8 @@ interface TenantsFile {
 class DataStoreTenantsFile(file: File, aead: Aead, scope: CoroutineScope) : TenantsFile {
     private val store: DataStore<Tenants> = DataStoreFactory.create(
         serializer = SealedTenantsSerializer(aead),
-        // Unreadable (the Keystore key is gone): start over from device.sealed,
-        // which is sealed under the same key and so reads as unpaired too.
+        // Unreadable (the Keystore key is gone): no servers. The credentials
+        // cannot be recovered without the key; the user adds and pairs again.
         corruptionHandler = ReplaceFileCorruptionHandler { Tenants() },
         scope = scope,
         produceFile = { file },
@@ -187,37 +178,33 @@ class DataStoreTenantsFile(file: File, aead: Aead, scope: CoroutineScope) : Tena
 }
 
 /**
- * Every tenant's pairing, in two files (muster docs/design/multi-tenant.md,
- * "Storage, and why it is two files"):
+ * Every tenant's pairing, in `tenants.sealed` ([file]).
  *
- * - `tenants.sealed` ([file]) holds the list;
- * - `device.sealed` ([legacy]) stays a valid v1 [DeviceRecord]: a copy of
- *   tenant [Tenants.DEFAULT], written FIRST whenever that tenant changes, and
- *   empty when it is removed. A downgraded app reads it as before.
+ * The single-server app kept its one pairing in `device.sealed`. On the first
+ * start of a multi-tenant app it is migrated ONCE ([ready]): that record
+ * becomes tenant [Tenants.DEFAULT], current, labelled by its host. Nothing
+ * re-pairs. The list is written (with [Tenants.migrated]) first, then
+ * `device.sealed` is deleted ([deleteLegacy]), so no second copy of the
+ * credential stays on disk. A kill between the two leaves the file, which the
+ * next start deletes without reading it again. Nothing ever writes
+ * `device.sealed`.
  *
- * At first use in a process the two are reconciled ([ready]):
- *
- * - never migrated: the single-server record becomes tenant `default`,
- *   current, labelled by its host. Nothing re-pairs, and `device.sealed` is
- *   left byte for byte as it was.
- * - `device.sealed` matching the recorded digest: the list is authoritative.
- * - differing: an older app changed it (after a downgrade), or this app was
- *   killed between its two writes; either way `device.sealed` holds the newer
- *   state of tenant `default`, which is taken. If that names an origin another
- *   tenant holds, tenant `default` becomes unpaired instead and [Tenants.notice]
- *   says why: two tenants never share an origin.
+ * There is no way back to the single-server file: Android refuses to install
+ * a lower versionCode over a release app on user builds, and an uninstall
+ * wipes the app's data, so a downgraded app never finds this phone's files.
  */
 class TenantRepository(
     private val file: TenantsFile,
-    private val legacy: DeviceStore,
-    /** SHA-256 (hex) of `device.sealed`'s bytes, or null when there is no file. */
-    private val legacyDigest: suspend () -> String?,
+    /** Reads `device.sealed` (the single-server record), for the migration only. */
+    private val readLegacy: suspend () -> DeviceRecord,
+    /** Deletes `device.sealed`; called after the migration, and at every later start (a no-op once it is gone). */
+    private val deleteLegacy: suspend () -> Unit,
     private val newId: () -> String = ::randomId,
 ) {
     private val lock = Mutex()
     @Volatile private var reconciled = false
 
-    /** The tenants, reconciled with `device.sealed` before the first value. */
+    /** The tenants, the single-server record migrated in before the first value. */
     val tenants: Flow<Tenants> = flow {
         ready()
         emitAll(file.data)
@@ -225,62 +212,33 @@ class TenantRepository(
 
     suspend fun read(): Tenants = tenants.first()
 
-    /** Reconciles once per process; every read and write waits for it. */
+    /** Migrates once per install, checked once per process; every read and write waits for it. */
     suspend fun ready() {
         if (reconciled) return
         lock.withLock {
             if (reconciled) return
-            reconcile()
+            migrate()
             reconciled = true
         }
     }
 
-    private suspend fun reconcile() {
+    private suspend fun migrate() {
         val t = file.data.first()
-        val rec = legacy.read()
-        val digest = legacyDigest()
         if (!t.migrated) {
+            val rec = readLegacy()
             val all = if (rec.origin != null) {
                 listOf(TenantRecord(Tenants.DEFAULT, Tenants.labelFor(rec.origin), Tenants.PALETTE[0], Tenants.DEFAULT_PROFILE, rec))
             } else {
                 emptyList()
             }
-            file.write(Tenants(current = all.firstOrNull()?.id, all = all, deviceDigest = digest, migrated = true))
-            return
+            file.write(Tenants(current = all.firstOrNull()?.id, all = all, migrated = true))
         }
-        if (digest == t.deviceDigest) return
-        // device.sealed changed behind the list's back: an older app's change,
-        // or a kill between our two writes. Take it.
-        val def = t.byId(Tenants.DEFAULT)
-        val others = t.all.filter { it.id != Tenants.DEFAULT }
-        var notice = t.notice
-        var rewriteLegacy: DeviceRecord? = null
-        val newDefault: TenantRecord? = when {
-            rec.origin == null -> null // removed (by us, or "change server" in an older app)
-            others.any { it.device.origin == rec.origin } -> {
-                notice = "An older version of the app paired ${Tenants.labelFor(rec.origin)} again, which another server " +
-                    "in this app already uses. That pairing was not kept: remove the extra phone on that server's Account → Devices."
-                val kept = def?.copy(device = def.device.unpaired())
-                rewriteLegacy = kept?.device ?: DeviceRecord()
-                kept
-            }
-            def != null -> def.copy(device = rec, label = if (def.device.origin == rec.origin) def.label else Tenants.labelFor(rec.origin))
-            else -> TenantRecord(
-                Tenants.DEFAULT, Tenants.labelFor(rec.origin), freeColour(others), freeProfile(others, Tenants.DEFAULT), rec,
-            )
-        }
-        if (rewriteLegacy != null) legacy.update { rewriteLegacy }
-        val all = listOfNotNull(newDefault) + others
-        val current = t.current?.takeIf { c -> all.any { it.id == c } } ?: all.firstOrNull()?.id
-        val next = t.copy(current = current, all = all, deviceDigest = legacyDigest(), notice = notice)
-        TenantRules.check(next)
-        file.write(next)
+        runCatching { deleteLegacy() }
     }
 
     /**
      * The one write path. [f] gets the current list; the result is checked
-     * ([TenantRules]) and stored. A change to tenant `default` (or its removal)
-     * writes `device.sealed` first, then the list with the new digest.
+     * ([TenantRules]) and stored in `tenants.sealed`, and nowhere else.
      */
     suspend fun update(f: (Tenants) -> Tenants): Tenants {
         ready()
@@ -289,12 +247,6 @@ class TenantRepository(
             var next = f(old)
             if (next.current == null && next.all.isNotEmpty()) next = next.copy(current = next.all.first().id)
             TenantRules.check(next)
-            val oldDefault = old.byId(Tenants.DEFAULT)?.device
-            val newDefault = next.byId(Tenants.DEFAULT)?.device
-            if (oldDefault != newDefault) {
-                legacy.update { newDefault ?: DeviceRecord() }
-                next = next.copy(deviceDigest = legacyDigest())
-            }
             if (next != old) file.write(next)
             next
         }
@@ -361,10 +313,6 @@ class TenantRepository(
         return out
     }
 
-    suspend fun clearNotice() {
-        update { it.copy(notice = null) }
-    }
-
     /** A [DeviceStore] that reads and writes tenant [id]'s pairing only ([TenantDeviceStore]). */
     fun deviceStore(id: String): DeviceStore = TenantDeviceStore(this, id)
 
@@ -385,11 +333,6 @@ class TenantRepository(
             return (1..12).map { alphabet[rng.nextInt(alphabet.length)] }.joinToString("")
         }
 
-        fun sha256Hex(bytes: ByteArray): String =
-            MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
-
-        /** [legacyDigest] for a file on disk. */
-        fun fileDigest(file: File): String? = if (file.exists()) sha256Hex(file.readBytes()) else null
     }
 }
 

@@ -11,7 +11,6 @@ import androidx.work.impl.WorkManagerImpl
 import androidx.work.testing.SynchronousExecutor
 import androidx.work.testing.WorkManagerTestInitHelper
 import dev.zacx.muster.core.auth.DeviceRecord
-import dev.zacx.muster.core.auth.DeviceStore
 import dev.zacx.muster.core.auth.TenantRecord
 import dev.zacx.muster.core.auth.TenantRepository
 import dev.zacx.muster.core.auth.Tenants
@@ -45,12 +44,6 @@ internal class MemTenantsFile(initial: Tenants = Tenants(migrated = true)) : Ten
     val state = MutableStateFlow(initial)
     override val data: Flow<Tenants> = state
     override suspend fun write(t: Tenants) { state.value = t }
-}
-
-internal class MemDeviceStore : DeviceStore {
-    val s = MutableStateFlow(DeviceRecord())
-    override val records: Flow<DeviceRecord> = s
-    override suspend fun update(f: (DeviceRecord) -> DeviceRecord) = f(s.value).also { s.value = it }
 }
 
 /** Profiles as cookie jars; records what was forgotten. */
@@ -119,7 +112,7 @@ class TenantOpsTest {
         val tb = TenantRecord("t2", "b", 2, "tenant-t2", DeviceRecord(origin = b, token = tokenB, deviceId = 2, keyAlias = "key-b"))
         profiles.jars[ta.webProfile] = mutableMapOf("muster_session" to "a")
         profiles.jars[tb.webProfile] = mutableMapOf("muster_session" to "b")
-        val repo = TenantRepository(MemTenantsFile(Tenants(current = "t2", all = listOf(ta, tb), migrated = true)), MemDeviceStore(), { null })
+        val repo = TenantRepository(MemTenantsFile(Tenants(current = "t2", all = listOf(ta, tb), migrated = true)), { DeviceRecord() }, {})
         val ops = TenantOps(
             repo, TenantSessions(profiles), { true }, ::DeviceApi, { deletedKeys += it },
             unregisterPush = { unregistered += it },
@@ -178,7 +171,7 @@ class TenantOpsTest {
 
     @Test
     fun aSecondServerNeedsWebViewProfiles() = runBlocking {
-        val repo = TenantRepository(MemTenantsFile(), MemDeviceStore(), { null })
+        val repo = TenantRepository(MemTenantsFile(), { DeviceRecord() }, {})
         val ops = TenantOps(repo, TenantSessions(JarProfiles(false)), { false }, ::DeviceApi, {}, {}, {}, ShellLocalState(ShellSnapshot(dir), { wm }))
         assertTrue(ops.add("https://a.example.test") is TenantRepository.AddResult.Added)
         assertEquals(TenantRepository.AddResult.NeedsWebViewProfiles, ops.add("https://b.example.test"))

@@ -17,7 +17,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Collections
 
-/** The two files in memory, with device.sealed's "digest" being the record itself. */
+/** The tenant file in memory. */
 private class MemTenantsFile : TenantsFile {
     val state = MutableStateFlow(Tenants())
     override val data: Flow<Tenants> = state
@@ -60,15 +60,8 @@ class TenantCredentialIsolationTest {
 
     private fun repoWith(vararg t: TenantRecord): TenantRepository {
         val f = MemTenantsFile()
-        f.state.value = Tenants(current = t.first().id, all = t.toList(), migrated = true, deviceDigest = "x")
-        val legacy = MemLegacy()
-        return TenantRepository(f, legacy, legacyDigest = { "x" })
-    }
-
-    private class MemLegacy : DeviceStore {
-        private val s = MutableStateFlow(DeviceRecord())
-        override val records: Flow<DeviceRecord> = s
-        override suspend fun update(f: (DeviceRecord) -> DeviceRecord): DeviceRecord = f(s.value).also { s.value = it }
+        f.state.value = Tenants(current = t.first().id, all = t.toList(), migrated = true)
+        return TenantRepository(f, readLegacy = { DeviceRecord() }, deleteLegacy = {})
     }
 
     private fun tenant(id: String, origin: String, token: String? = null) =

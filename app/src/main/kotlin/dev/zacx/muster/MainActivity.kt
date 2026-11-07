@@ -178,10 +178,6 @@ class MainActivity : ComponentActivity() {
         val tenants = app.tenants.read()
         StartupProbe.mark("store.read")
         tenants.all.forEach { Channels.ensure(this, it.notifyTenant()) }
-        tenants.notice?.let { n ->
-            AlertDialog.Builder(this).setMessage(n).setPositiveButton(android.R.string.ok, null).show()
-            app.tenants.clearNotice()
-        }
         // The activity is exported (it is the launcher): the path is re-checked
         // (a muster path only, and tapTarget refuses upload routes whatever
         // AttachmentGate says), and a tap's tenant only selects which of this
@@ -610,7 +606,6 @@ class MainActivity : ComponentActivity() {
                         onSettings = { id -> open = id },
                         onRemove = ::removeServer,
                         onAdd = { showServerUrl(adding = true) },
-                        onDismissNotice = { lifecycleScope.launch { app.tenants.clearNotice() } },
                         onClose = if (all.all.isNotEmpty()) ({ lifecycleScope.launch { route(Intent()) } }) else null,
                     )
                 }

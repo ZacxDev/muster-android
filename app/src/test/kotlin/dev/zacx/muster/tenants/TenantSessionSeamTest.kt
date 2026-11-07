@@ -31,10 +31,8 @@ class TenantSessionSeamTest {
 
     @Test
     fun switchingBetweenStoredTenantsNeverSharesASession() = runBlocking {
-        val legacy = MemDeviceStore().apply {
-            s.value = DeviceRecord(origin = "https://home.example.test", token = "mdv_" + "T".repeat(43), deviceId = 1)
-        }
-        val repo = TenantRepository(MemTenantsFile(Tenants()), legacy, { "d" })
+        val legacy = DeviceRecord(origin = "https://home.example.test", token = "mdv_" + "T".repeat(43), deviceId = 1)
+        val repo = TenantRepository(MemTenantsFile(Tenants()), readLegacy = { legacy }, deleteLegacy = {})
         val profiles = Profiles()
         val sessions = TenantSessions(profiles)
         // The sign-in from before the upgrade lives in the default profile.

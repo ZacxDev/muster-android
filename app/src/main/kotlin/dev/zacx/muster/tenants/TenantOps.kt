@@ -39,7 +39,7 @@ class TenantOps(
 
     /**
      * Removes tenant [id]: ends its pairing on its server (the app's own
-     * unpair, `DELETE /api/device/pair`; best effort, so a server that cannot
+     * unpair, `DELETE /api/device`; best effort, so a server that cannot
      * be reached keeps the row on its Account → Devices until it is removed
      * there), drops its push registration, step-up key, WebView profile,
      * notifications and channels, then the record. The background job stays

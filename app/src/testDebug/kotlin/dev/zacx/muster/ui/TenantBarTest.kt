@@ -100,7 +100,7 @@ class TenantBarTest {
                 ServersScreen(
                     Tenants(current = Tenants.DEFAULT, all = listOf(home, work), migrated = true),
                     onOpen = { events += "open:$it" }, onSettings = { events += "settings:$it" }, onRemove = { events += "remove:$it" },
-                    onAdd = { events += "add" }, onDismissNotice = {}, onClose = {},
+                    onAdd = { events += "add" }, onClose = {},
                 )
             }
         }

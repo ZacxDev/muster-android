@@ -248,7 +248,6 @@ fun ServersScreen(
     onSettings: (String) -> Unit,
     onRemove: (String) -> Unit,
     onAdd: () -> Unit,
-    onDismissNotice: () -> Unit,
     onClose: (() -> Unit)?,
 ) {
     var confirm by remember { mutableStateOf<TenantRecord?>(null) }
@@ -258,14 +257,6 @@ fun ServersScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text("muster servers", style = MaterialTheme.typography.headlineSmall)
-            tenants.notice?.let { n ->
-                Surface(color = MaterialTheme.colorScheme.errorContainer) {
-                    Column(Modifier.padding(12.dp)) {
-                        Text(n, style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = onDismissNotice) { Text("OK") }
-                    }
-                }
-            }
             tenants.all.forEach { t ->
                 Column(Modifier.fillMaxWidth().testTag("server-${t.id}")) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
