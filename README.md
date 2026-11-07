@@ -204,6 +204,9 @@ phase 3. Nothing on the server changes.
   of the credential stays on disk. There is no downgrade path: Android
   refuses a lower versionCode over a release build, and an uninstall wipes
   the app's data.
+  Ask buttons on notifications drawn by 0.1.5 stop working after the
+  upgrade (they carry no server, so they are refused and send nothing):
+  dismiss those notifications; new ones work.
 
 ### 🔴 Uploaded files
 

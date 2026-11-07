@@ -35,6 +35,14 @@ class TenantRoutingTest {
         assertEquals(TapRouting.Target(a, null, switched = false), TapRouting.resolve(tenants, "gone", "/tasks/4"))
     }
 
+    /** After a renderer crash the shell comes back on the tenant in view, at home, whatever the last tap named. */
+    @Test
+    fun aRendererCrashReloadsTheTenantInView() {
+        assertEquals(TapRouting.Target(b, null, switched = false), TapRouting.afterRendererGone(tenants.copy(current = "t2")))
+        assertEquals(TapRouting.Target(a, null, switched = false), TapRouting.afterRendererGone(tenants))
+        assertNull(TapRouting.afterRendererGone(Tenants(migrated = true)))
+    }
+
     @Test
     fun noTenantsNoShell() {
         assertNull(TapRouting.resolve(Tenants(migrated = true), null, null))

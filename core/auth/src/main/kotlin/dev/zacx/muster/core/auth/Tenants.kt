@@ -57,6 +57,12 @@ data class Tenants(
     val all: List<TenantRecord> = emptyList(),
     /** False until the single-server record has been migrated in, once. */
     val migrated: Boolean = false,
+    /**
+     * WebView profiles of removed tenants that could not be deleted yet (still
+     * in use by a WebView being destroyed, or no `MULTI_PROFILE`); retried at
+     * the next start, before any WebView exists.
+     */
+    @SerialName("profiles_to_delete") val profilesToDelete: List<String> = emptyList(),
 ) {
     fun byId(id: String?): TenantRecord? = all.firstOrNull { it.id == id }
 

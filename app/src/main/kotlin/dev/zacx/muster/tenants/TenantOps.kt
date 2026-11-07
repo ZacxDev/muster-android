@@ -38,24 +38,41 @@ class TenantOps(
     suspend fun add(origin: String): TenantRepository.AddResult = repo.add(origin, multiProfile())
 
     /**
-     * Removes tenant [id]: ends its pairing on its server (the app's own
-     * unpair, `DELETE /api/device`; best effort, so a server that cannot
-     * be reached keeps the row on its Account → Devices until it is removed
-     * there), drops its push registration, step-up key, WebView profile,
-     * notifications and channels, then the record. The background job stays
-     * while another tenant is paired. Returns the removed record, or null.
+     * Removes tenant [id]. The record goes FIRST, so a push arriving during
+     * the removal finds no tenant and is dropped instead of drawing (and
+     * recreating the channels being deleted). Then: its pairing is ended on
+     * its server (the app's own unpair, `DELETE /api/device`; best effort, so
+     * a server that cannot be reached keeps the row on its Account → Devices
+     * until it is removed there), and its push registration, step-up key,
+     * WebView profile (or, if it cannot be deleted yet, a retry recorded),
+     * notifications and channels go. The background job stays while another
+     * tenant is paired. Returns the removed record, or null.
      */
     suspend fun remove(id: String): TenantRecord? {
-        val t = repo.read().byId(id) ?: return null
+        val t = repo.remove(id) ?: return null
         val token = t.device.token
         if (token != null) withContext(io) { runCatching { api(t.origin).unpair(token) } }
         runCatching { unregisterPush(t.pushInstance) }
         t.device.keyAlias?.let { a -> withContext(io) { runCatching { deleteKey(a) } } }
-        sessions.forget(t.webProfile)
+        if (!sessions.forget(t.webProfile)) {
+            repo.update { it.copy(profilesToDelete = (it.profilesToDelete + t.webProfile).distinct()) }
+        }
         runCatching { dropNotifications(t) }
-        val removed = repo.remove(id)
         local.forget(cancelRefresh = repo.read().all.none { it.device.paired })
-        return removed
+        return t
+    }
+
+    /**
+     * Deletes the profiles a removal could not delete. Called with no WebView
+     * alive (before the shell builds one). A name a live tenant uses is only
+     * dropped from the list, never deleted.
+     */
+    suspend fun retryProfileDeletes() {
+        val t = repo.read()
+        if (t.profilesToDelete.isEmpty()) return
+        val inUse = t.all.map { it.webProfile }.toSet()
+        val done = t.profilesToDelete.filter { it in inUse || sessions.forget(it) }.toSet()
+        if (done.isNotEmpty()) repo.update { it.copy(profilesToDelete = it.profilesToDelete - done) }
     }
 
     /** Unpairs tenant [id] and keeps it as a server to sign in to and pair again. */
@@ -83,6 +100,13 @@ object TapRouting {
      * tenant that is gone opens the tenant in view at its home page: its
      * path belonged to another server, and is never opened on this one.
      */
+    /**
+     * The renderer died: the shell is rebuilt on the tenant in view, at its
+     * home page. Never the activity's last intent, whose tap could name
+     * another server (and switch to it).
+     */
+    fun afterRendererGone(tenants: Tenants): Target? = tenants.active?.let { Target(it, null, switched = false) }
+
     fun resolve(tenants: Tenants, tenantId: String?, path: String?): Target? {
         val active = tenants.active ?: return null
         if (tenantId == null) return Target(active, path, switched = false)

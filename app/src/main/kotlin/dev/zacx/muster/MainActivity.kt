@@ -177,6 +177,8 @@ class MainActivity : ComponentActivity() {
         val stored = if (launchesHome) lifecycleScope.async(Dispatchers.IO) { runCatching { snapshot.read(hardware = true) }.getOrNull() } else null
         val tenants = app.tenants.read()
         StartupProbe.mark("store.read")
+        // No WebView alive: a removed server's profile that was still in use can go now.
+        if (webView == null) app.ops.retryProfileDeletes()
         tenants.all.forEach { Channels.ensure(this, it.notifyTenant()) }
         // The activity is exported (it is the launcher): the path is re-checked
         // (a muster path only, and tapTarget refuses upload routes whatever
@@ -363,7 +365,11 @@ class MainActivity : ComponentActivity() {
                     webView = null
                     policy = null
                     back.onWebViewChanged()
-                    lifecycleScope.launch { route(intent) }
+                    // The tenant in view again, never the last intent (it could switch servers).
+                    lifecycleScope.launch {
+                        val t = TapRouting.afterRendererGone(app.tenants.read())
+                        if (t != null) showShell(t.tenant, null) else route(Intent())
+                    }
                 }
             }
         }

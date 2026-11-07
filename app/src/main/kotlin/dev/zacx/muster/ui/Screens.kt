@@ -123,6 +123,7 @@ fun PhoneSettingsScreen(
     onClose: () -> Unit,
 ) {
     val r by records.collectAsState(initial = DeviceRecord())
+    var confirmRemove by remember { mutableStateOf(false) }
     var invalid by remember { mutableStateOf(false) }
     LaunchedEffect(r.keyKind) { invalid = keyInvalidated() }
     Surface(Modifier.fillMaxSize()) {
@@ -155,9 +156,12 @@ fun PhoneSettingsScreen(
                 OutlinedButton(onClick = onRetryPush) { Text("Register push again") }
                 OutlinedButton(onClick = onUnpair) { Text("Unpair this phone") }
             }
-            OutlinedButton(onClick = onRemoveServer) { Text("Remove this server") }
+            OutlinedButton(onClick = { confirmRemove = true }, modifier = Modifier.testTag(TAG_SETTINGS_REMOVE)) { Text("Remove this server") }
             TextButton(onClick = onClose) { Text("Back") }
         }
+    }
+    if (confirmRemove) {
+        RemoveServerDialog(title, onConfirm = { confirmRemove = false; onRemoveServer() }, onDismiss = { confirmRemove = false })
     }
 }
 
@@ -174,6 +178,7 @@ const val TAG_ADD = "tenant-add"
 const val TAG_MANAGE = "tenant-manage"
 const val TAG_URL_CONTINUE = "url-continue"
 const val TAG_REMOVE_CONFIRM = "remove-confirm"
+const val TAG_SETTINGS_REMOVE = "settings-remove"
 
 /** The menu row for tenant [id]. */
 fun tagTenant(id: String) = "tenant-$id"
@@ -277,19 +282,28 @@ fun ServersScreen(
         }
     }
     confirm?.let { t ->
-        AlertDialog(
-            onDismissRequest = { confirm = null },
-            title = { Text("Remove ${t.label}?") },
-            text = {
-                Text(
-                    "This phone stops getting its notifications. Its pairing is ended on that server, and its sign-in, " +
-                        "step-up key and settings are deleted from this phone. Other servers are not touched.",
-                )
-            },
-            confirmButton = { TextButton(onClick = { confirm = null; onRemove(t.id) }, modifier = Modifier.testTag(TAG_REMOVE_CONFIRM)) { Text("Remove") } },
-            dismissButton = { TextButton(onClick = { confirm = null }) { Text("Cancel") } },
-        )
+        RemoveServerDialog(t.label, onConfirm = { confirm = null; onRemove(t.id) }, onDismiss = { confirm = null })
     }
+}
+
+/**
+ * The one confirmation before a server is removed, wherever Remove was
+ * pressed (the server list, or that server's phone settings).
+ */
+@Composable
+fun RemoveServerDialog(label: String, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Remove $label?") },
+        text = {
+            Text(
+                "This phone stops getting its notifications. Its pairing is ended on that server, and its sign-in, " +
+                    "step-up key and settings are deleted from this phone. Other servers are not touched.",
+            )
+        },
+        confirmButton = { TextButton(onClick = onConfirm, modifier = Modifier.testTag(TAG_REMOVE_CONFIRM)) { Text("Remove") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 /** The switcher bar's background: a shade above muster's dark theme-color (MainActivity.SHELL_BACKGROUND). */

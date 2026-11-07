@@ -50,8 +50,12 @@ internal class MemTenantsFile(initial: Tenants = Tenants(migrated = true)) : Ten
 internal class JarProfiles(override val multiProfile: Boolean = true) : TenantSessions.Backend<String> {
     val jars = mutableMapOf<String, MutableMap<String, String>>()
     val deleted = mutableListOf<String>()
+    var deleteFails = false
     override fun setProfile(view: String, name: String) {}
-    override fun delete(name: String): Boolean { if (name == TenantSessions.DEFAULT) return false; deleted += name; jars.remove(name); return true }
+    override fun delete(name: String): Boolean {
+        if (deleteFails || name == TenantSessions.DEFAULT) return false
+        deleted += name; jars.remove(name); return true
+    }
     override fun clear(name: String) { jars[name]?.clear() }
     override fun flush(name: String) {}
 }
@@ -77,6 +81,9 @@ class TenantOpsTest {
     private val deletedKeys = mutableListOf<String>()
     private val dropped = mutableListOf<String>()
     private val profiles = JarProfiles()
+    private lateinit var file: MemTenantsFile
+    /** For each dropNotifications call: was the tenant's record already gone? */
+    private val recordGoneAtDrop = mutableListOf<Boolean>()
 
     @Before
     fun setUp() {
@@ -112,11 +119,12 @@ class TenantOpsTest {
         val tb = TenantRecord("t2", "b", 2, "tenant-t2", DeviceRecord(origin = b, token = tokenB, deviceId = 2, keyAlias = "key-b"))
         profiles.jars[ta.webProfile] = mutableMapOf("muster_session" to "a")
         profiles.jars[tb.webProfile] = mutableMapOf("muster_session" to "b")
-        val repo = TenantRepository(MemTenantsFile(Tenants(current = "t2", all = listOf(ta, tb), migrated = true)), { DeviceRecord() }, {})
+        file = MemTenantsFile(Tenants(current = "t2", all = listOf(ta, tb), migrated = true))
+        val repo = TenantRepository(file, { DeviceRecord() }, {})
         val ops = TenantOps(
             repo, TenantSessions(profiles), { true }, ::DeviceApi, { deletedKeys += it },
             unregisterPush = { unregistered += it },
-            dropNotifications = { dropped += it.id },
+            dropNotifications = { t -> dropped += t.id; recordGoneAtDrop += file.state.value.byId(t.id) == null },
             local = ShellLocalState(ShellSnapshot(dir), { wm }),
         )
         RefreshSchedule.ensure(wm)
@@ -152,6 +160,36 @@ class TenantOpsTest {
         assertEquals(listOf("DELETE /api/device Bearer $tokenA"), seenA.toList())
         assertNull(repo.read().active)
         assertEquals(WorkInfo.State.CANCELLED, jobState())
+    }
+
+    /**
+     * The record goes before the notifications and channels: a push arriving
+     * mid-removal finds no tenant (TenantPushRouter drops an unknown
+     * instance), so it cannot draw and recreate the channels being deleted.
+     */
+    @Test
+    fun theRecordIsGoneBeforeNotificationsAndChannelsAreDropped() = runBlocking {
+        val (ops, _) = setUpTwo()
+        ops.remove("t2")
+        assertEquals(listOf(true), recordGoneAtDrop)
+    }
+
+    /** A profile still in use at removal is recorded and deleted at the next start, not left forever. */
+    @Test
+    fun aProfileThatCouldNotBeDeletedIsDeletedLater() = runBlocking {
+        val (ops, repo) = setUpTwo()
+        profiles.deleteFails = true
+        ops.remove("t2")
+        assertEquals(listOf("tenant-t2"), repo.read().profilesToDelete)
+        assertEquals(emptyList<String>(), profiles.deleted)
+
+        ops.retryProfileDeletes() // still in use: kept for the next try
+        assertEquals(listOf("tenant-t2"), repo.read().profilesToDelete)
+
+        profiles.deleteFails = false // the next start: no WebView holds it
+        ops.retryProfileDeletes()
+        assertEquals(listOf("tenant-t2"), profiles.deleted)
+        assertEquals(emptyList<String>(), repo.read().profilesToDelete)
     }
 
     @Test

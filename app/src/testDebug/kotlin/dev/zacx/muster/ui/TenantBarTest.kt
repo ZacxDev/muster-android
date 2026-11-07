@@ -12,6 +12,7 @@ import androidx.compose.ui.test.performTouchInput
 import dev.zacx.muster.core.auth.DeviceRecord
 import dev.zacx.muster.core.auth.TenantRecord
 import dev.zacx.muster.core.auth.Tenants
+import kotlinx.coroutines.flow.flowOf
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
@@ -109,6 +110,28 @@ class TenantBarTest {
         rule.onNodeWithText("Remove work.example.test?").assertIsDisplayed()
         rule.onNodeWithTag(TAG_REMOVE_CONFIRM).performClick()
         assertEquals(listOf("remove:t2"), events)
+    }
+
+    /** The other entry point, a server's phone settings, asks with the same confirmation. */
+    @Test
+    fun removingFromAServersSettingsAsksFirst() {
+        rule.setContent {
+            MaterialTheme {
+                PhoneSettingsScreen(
+                    title = "work.example.test",
+                    records = flowOf(work.device),
+                    keyInvalidated = { false },
+                    notificationsEnabled = { true },
+                    onNotificationSettings = {}, onRetryPush = {}, onUnpair = { events += "unpair" },
+                    onRemoveServer = { events += "remove" }, onClose = {},
+                )
+            }
+        }
+        rule.onNodeWithTag(TAG_SETTINGS_REMOVE).performClick()
+        assertEquals("nothing removed before the confirmation", emptyList<String>(), events)
+        rule.onNodeWithText("Remove work.example.test?").assertIsDisplayed()
+        rule.onNodeWithTag(TAG_REMOVE_CONFIRM).performClick()
+        assertEquals(listOf("remove"), events)
     }
 
     @Test

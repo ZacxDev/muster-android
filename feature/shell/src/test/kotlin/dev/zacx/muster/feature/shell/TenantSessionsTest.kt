@@ -39,9 +39,14 @@ class FakeProfiles(override val multiProfile: Boolean = true) : TenantSessions.B
         return true
     }
 
+    /**
+     * Without profiles there is only the global store, which is the default
+     * profile's (what WebView's CookieManager.getInstance() clears): a clear
+     * for ANY name lands there.
+     */
     override fun clear(name: String) {
         cleared += name
-        jars[name]?.clear()
+        if (multiProfile) jars[name]?.clear() else jars[TenantSessions.DEFAULT]?.clear()
     }
 
     override fun flush(name: String) {}
@@ -95,11 +100,11 @@ class TenantSessionsTest {
         sessions.prepare(v, "tenant-t2")
         p.setCookie(v, "muster_session", "b")
 
-        sessions.forget("tenant-t2")
+        assertTrue(sessions.forget("tenant-t2"))
         assertEquals(listOf("tenant-t2"), p.deleted)
         assertEquals("the other server's session is untouched", "a", p.jar(TenantSessions.DEFAULT)["muster_session"])
 
-        sessions.forget(TenantSessions.DEFAULT)
+        assertTrue(sessions.forget(TenantSessions.DEFAULT))
         assertEquals(listOf(TenantSessions.DEFAULT), p.cleared)
         assertTrue(p.jar(TenantSessions.DEFAULT).isEmpty())
     }
@@ -111,8 +116,27 @@ class TenantSessionsTest {
         sessions.prepare(v, "tenant-t2")
         p.setCookie(v, "muster_session", "b")
         p.deleteFails = true
-        sessions.forget("tenant-t2")
+        assertFalse("not deleted: the app must retry", sessions.forget("tenant-t2"))
         assertEquals(listOf("tenant-t2"), p.cleared)
         assertTrue(p.jar("tenant-t2").isEmpty())
+    }
+
+    /**
+     * 🔴 Without MULTI_PROFILE, removing a non-default server never falls back
+     * to the global store: that would sign the default-profile server out.
+     * It is reported (false) for a later retry instead.
+     */
+    @Test
+    fun withoutProfilesRemovingAnotherServerNeverSignsTheDefaultOneOut() {
+        val old = FakeProfiles(multiProfile = false)
+        old.jar(TenantSessions.DEFAULT)["muster_session"] = "a"
+        old.jar("tenant-t2")["muster_session"] = "b" // made while the WebView still had profiles
+        val s = TenantSessions(old)
+        assertFalse(s.forget("tenant-t2"))
+        assertEquals("a", old.jar(TenantSessions.DEFAULT)["muster_session"])
+        assertEquals(emptyList<String>(), old.cleared)
+        // Control: removing the default-profile server itself clears it.
+        assertTrue(s.forget(TenantSessions.DEFAULT))
+        assertNull(old.jar(TenantSessions.DEFAULT)["muster_session"])
     }
 }

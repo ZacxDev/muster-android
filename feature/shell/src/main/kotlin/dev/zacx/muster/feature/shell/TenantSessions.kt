@@ -22,7 +22,10 @@ import androidx.webkit.WebViewFeature
  *   in the default profile, where the other server's cookies live. (Such a
  *   phone can only ever have added one tenant, which uses the default.)
  * - A removed tenant's profile is deleted, or for the default profile
- *   cleared ([forget]).
+ *   cleared ([forget]). 🔴 Never by clearing the global cookie store for
+ *   another tenant's profile: without `MULTI_PROFILE` the global store IS the
+ *   default profile, another server's sign-in. A profile that cannot be
+ *   deleted now is reported, for the app to retry later.
  *
  * [V] is the view type (WebView in the app; a fake in the JVM tests).
  */
@@ -37,7 +40,7 @@ class TenantSessions<V>(private val backend: Backend<V>) {
         /** Deletes profile [name] and all its data; false if it could not be (in use, or the default). */
         fun delete(name: String): Boolean
 
-        /** Removes every cookie and all web storage of profile [name], keeping the profile. */
+        /** Removes every cookie and all web storage of profile [name], keeping the profile. Never another profile's. */
         fun clear(name: String)
 
         /** Writes profile [name]'s cookies to disk now. */
@@ -54,11 +57,22 @@ class TenantSessions<V>(private val backend: Backend<V>) {
     /** A second tenant needs its own profile, so it needs `MULTI_PROFILE`; the first uses the default. */
     fun canAddTenant(existing: Int): Boolean = existing == 0 || backend.multiProfile
 
-    /** A removed tenant's web data goes: its profile is deleted, or cleared when it cannot be (the default). */
-    fun forget(profile: String) {
-        if (profile == DEFAULT || !backend.multiProfile || !runCatching { backend.delete(profile) }.getOrDefault(false)) {
-            runCatching { backend.clear(profile) }
+    /**
+     * A removed tenant's web data goes. The default profile cannot be deleted,
+     * so it is cleared. Any other profile is deleted; if it cannot be (still in
+     * use), its own data is cleared and false says "retry the delete later".
+     * Without `MULTI_PROFILE` another profile is not touched at all (false):
+     * the only store reachable then is the default profile's.
+     */
+    fun forget(profile: String): Boolean {
+        if (profile == DEFAULT) {
+            runCatching { backend.clear(DEFAULT) }
+            return true
         }
+        if (!backend.multiProfile) return false
+        if (runCatching { backend.delete(profile) }.getOrDefault(false)) return true
+        runCatching { backend.clear(profile) }
+        return false
     }
 
     fun flush(profile: String) {
@@ -101,7 +115,8 @@ class WebViewProfiles : TenantSessions.Backend<WebView> {
             val p = ProfileStore.getInstance().getProfile(name) ?: return
             p.cookieManager.removeAllCookies(null)
             p.webStorage.deleteAllData()
-        } else {
+        } else if (name == TenantSessions.DEFAULT) {
+            // Without profiles the global store is the default profile, and only that one's.
             android.webkit.CookieManager.getInstance().removeAllCookies(null)
             android.webkit.WebStorage.getInstance().deleteAllData()
         }
