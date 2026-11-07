@@ -67,6 +67,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.unifiedpush.android.connector.UnifiedPush
 
 /**
@@ -212,9 +213,11 @@ class MainActivity : ComponentActivity() {
                     val p = OriginPolicy.forServer(url.trim()) ?: return@ServerUrlScreen getString(R.string.url_invalid)
                     lifecycleScope.launch {
                         when (val r = app.ops.add(p.allowedOriginRule)) {
-                            is TenantRepository.AddResult.Added -> route(Intent())
+                            is TenantRepository.AddResult.Added -> { readSsoOrigins(r.tenant.id); route(Intent()) }
                             // Already one of this phone's servers: switch to it.
-                            is TenantRepository.AddResult.Duplicate -> { app.tenants.select(r.tenant.id); route(Intent()) }
+                            is TenantRepository.AddResult.Duplicate -> {
+                                app.tenants.select(r.tenant.id); readSsoOrigins(r.tenant.id); route(Intent())
+                            }
                             TenantRepository.AddResult.NeedsWebViewProfiles -> AlertDialog.Builder(this@MainActivity)
                                 .setTitle(R.string.webview_update_title).setMessage(R.string.webview_update)
                                 .setPositiveButton(android.R.string.ok, null).show()
@@ -226,6 +229,30 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Reads the new server's sign-in origins BEFORE its first page loads (a
+     * gated server's first page is a redirect to sign-in, which must load in
+     * the WebView). At most [SSO_READ_TIMEOUT_MS]; on a timeout or failure the
+     * server opens with what is stored (none for a new one), and the shell's
+     * own read on open ([refreshSsoOriginsInBackground]) tries again.
+     */
+    private suspend fun readSsoOrigins(id: String) {
+        withTimeoutOrNull(SSO_READ_TIMEOUT_MS) { app.ops.refreshSsoOrigins(id) }
+    }
+
+    /**
+     * Re-reads tenant [t]'s sign-in origins after its shell opened. When they
+     * changed and that tenant is still in view, the shell is rebuilt on them
+     * (at its home page); otherwise they apply to the next shell.
+     */
+    private fun refreshSsoOriginsInBackground(t: TenantRecord) {
+        lifecycleScope.launch {
+            if (!app.ops.refreshSsoOrigins(t.id)) return@launch
+            val fresh = app.tenants.read().byId(t.id) ?: return@launch
+            if (shownTenant == t.id) showShell(fresh, null)
+        }
+    }
+
     // --- the shell --------------------------------------------------------------------
 
     /**
@@ -234,11 +261,13 @@ class MainActivity : ComponentActivity() {
      * new WebView in its own profile (the old one is destroyed first).
      */
     private fun showShell(t: TenantRecord, path: String?, picture: Bitmap? = null) {
-        val p = OriginPolicy.forServer(t.origin) ?: return showServerUrl(adding = false)
+        val p = OriginPolicy.forServer(t.origin, t.ssoOrigins) ?: return showServerUrl(adding = false)
         val target = ShellNavigation.tapTarget(path, p)
         val existing = webView
         screenBack.isEnabled = false
-        if (existing != null && shownTenant == t.id && policy?.allowedOriginRule == p.allowedOriginRule) {
+        if (existing != null && shownTenant == t.id && policy?.allowedOriginRule == p.allowedOriginRule &&
+            policy?.ssoOrigins == p.ssoOrigins
+        ) {
             if (path != null) existing.loadUrl(target)
             return
         }
@@ -322,6 +351,7 @@ class MainActivity : ComponentActivity() {
         back.onWebViewChanged()
         StartupProbe.mark("webview.loadUrl")
         wv.loadUrl(target)
+        refreshSsoOriginsInBackground(t)
         if (t.device.paired) refreshPush(t.id, registerIfNeeded = t.device.pushStatus != PushStatus.REGISTERED)
     }
 
@@ -675,6 +705,9 @@ class MainActivity : ComponentActivity() {
     companion object {
         const val ACTION_SETTINGS = "dev.zacx.muster.SETTINGS"
         const val EXTRA_PATH = "path"
+
+        /** How long Add server waits for the new server's sign-in origins before opening it anyway. */
+        const val SSO_READ_TIMEOUT_MS = 5_000L
 
         /** muster's dark theme-color (web: `<meta name="theme-color">`), the launcher icon's tile too. */
         const val SHELL_BACKGROUND = 0xFF110F1C.toInt()

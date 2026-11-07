@@ -42,6 +42,14 @@ data class TenantRecord(
     @SerialName("web_profile") val webProfile: String,
     /** Its pairing, exactly the single-server record; [DeviceRecord.origin] is the pin for its credential. */
     val device: DeviceRecord,
+    /**
+     * The sign-in origins its server advertises (`GET /api/device/web`), which
+     * may load in ITS WebView (and profile) so an SSO gate in front of muster
+     * works in the shell. Empty for a server with no gate, an older muster,
+     * and every tenant stored before this field existed. Never typed by the
+     * user; only the server's answer writes it ([TenantRepository.setSsoOrigins]).
+     */
+    @SerialName("sso_origins") val ssoOrigins: List<String> = emptyList(),
 ) {
     val origin: String get() = device.origin.orEmpty()
 
@@ -317,6 +325,21 @@ class TenantRepository(
             t.copy(all = t.all.map { if (it.id == id) it.copy(device = pinned) else it })
         }
         return out
+    }
+
+    /**
+     * Replaces tenant [id]'s advertised sign-in origins. A tenant that no
+     * longer exists is not recreated; false then. True when the list changed.
+     */
+    suspend fun setSsoOrigins(id: String, origins: List<String>): Boolean {
+        var changed = false
+        update { t ->
+            val rec = t.byId(id) ?: return@update t
+            if (rec.ssoOrigins == origins) return@update t
+            changed = true
+            t.copy(all = t.all.map { if (it.id == id) it.copy(ssoOrigins = origins) else it })
+        }
+        return changed
     }
 
     /** A [DeviceStore] that reads and writes tenant [id]'s pairing only ([TenantDeviceStore]). */

@@ -208,6 +208,46 @@ phase 3. Nothing on the server changes.
   upgrade (they carry no server, so they are refused and send nothing):
   dismiss those notifications; new ones work.
 
+### A server behind a sign-in gate
+
+A muster can sit behind a sign-in gate at its edge: an SSO proxy (civitai's
+oauth2-proxy) that sends a browser to an identity provider before muster's
+own page. Until now the gate's redirect left the muster origin, so it opened
+in a Custom Tab: the gate's cookie landed in the browser and the shell never
+reached muster.
+
+- **The server says which origins its sign-in passes through:**
+  `GET /api/device/web` answers `{"sso_origins": ["https://…", …]}`. It takes
+  no credential (it is read before the first sign-in, so before pairing), so
+  the edge must leave `/api/device/` ungated, which the device tier needs
+  anyway. A muster without the route (404) advertises none. The user never
+  types the list.
+- **When:** Add server reads it before the new server's first page (5 s at
+  most), and every shell open re-reads it in the background; a change
+  rebuilds that server's shell. A failed read keeps what is stored.
+- **What they get: a load, nothing else.** Those origins load in that
+  server's WebView, in its own profile, so the gate's and the provider's
+  cookies stay with that server. 🔴 The bridge, the document-start scripts,
+  the microphone, native dialogs and upload routes stay on the muster origin
+  exactly. Only bare `https` origins are kept (no path, query or user info),
+  never the muster origin itself, at most 8. Any other origin still opens in
+  a Custom Tab.
+- **The gate's cookie expires** (12 h on civitai's). muster's htmx requests
+  and its event stream then get the gate's redirect or 401 and would stall
+  silently. A document-start script (muster origin only, servers with a
+  sign-in list only) answers an htmx send error, an htmx 401 or a closed
+  event stream by fetching `/manifest.webmanifest` with `redirect: "manual"`.
+  muster serves that file without its own session, so only the GATE can turn
+  it into a redirect or a 401; then the page reloads into sign-in, at most
+  once per 30 s. A probe that fails on the network does nothing. 🔴 The edge
+  must keep `/manifest.webmanifest` gated, or the probe never fires.
+- **🔴 Not every provider works in a WebView.** Google's OAuth policy refuses
+  sign-in from an embedded WebView (`disallowed_useragent`), and an emailed login link opens
+  in the mail app's browser, not the shell. Sign in with a provider that
+  allows a WebView (GitHub, Discord) and advertise that provider's origin. A
+  provider's passkey does not work either: the WebView runs WebAuthn as this
+  app, which the provider's site does not list.
+
 ### 🔴 Uploaded files
 
 muster serves uploaded bytes on its own origin, which is where the bridge

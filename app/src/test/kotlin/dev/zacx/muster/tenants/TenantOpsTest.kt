@@ -214,4 +214,58 @@ class TenantOpsTest {
         assertTrue(ops.add("https://a.example.test") is TenantRepository.AddResult.Added)
         assertEquals(TenantRepository.AddResult.NeedsWebViewProfiles, ops.add("https://b.example.test"))
     }
+
+    // --- sign-in origins -----------------------------------------------------------------
+
+    private fun webServer(vararg answers: MockResponse): String {
+        val s = MockWebServer()
+        answers.forEach { s.enqueue(it) }
+        s.start()
+        servers += s
+        return s.url("/").toString().trimEnd('/')
+    }
+
+    private fun opsFor(origin: String, stored: List<String> = emptyList()): Pair<TenantOps, TenantRepository> {
+        val t = TenantRecord("t9", "x", 1, "tenant-t9", DeviceRecord(origin = origin), ssoOrigins = stored)
+        file = MemTenantsFile(Tenants(current = "t9", all = listOf(t), migrated = true))
+        val repo = TenantRepository(file, { DeviceRecord() }, {})
+        val ops = TenantOps(
+            repo, TenantSessions(profiles), { true }, ::DeviceApi, {}, unregisterPush = {}, dropNotifications = {},
+            local = ShellLocalState(ShellSnapshot(dir), { wm }),
+        )
+        return ops to repo
+    }
+
+    private fun json(code: Int, body: String) =
+        MockResponse.Builder().code(code).addHeader("Content-Type", "application/json").body(body).build()
+
+    @Test
+    fun advertisedSignInOriginsAreStoredNormalisedAndFiltered() = runBlocking {
+        val origin = webServer(
+            json(200, """{"sso_origins":["https://Auth.Example.test/","http://plain.example.test","https://p.example.test/login","https://idp.example.test","https://auth.example.test"]}"""),
+        )
+        val (ops, repo) = opsFor(origin)
+        assertTrue(ops.refreshSsoOrigins("t9"))
+        assertEquals(listOf("https://auth.example.test", "https://idp.example.test"), repo.read().byId("t9")!!.ssoOrigins)
+    }
+
+    /** A blip never drops a working sign-in: a failed read keeps the stored list. */
+    @Test
+    fun aFailedReadKeepsWhatIsStored() = runBlocking {
+        val stored = listOf("https://auth.example.test")
+        val origin = webServer(json(503, "{}"), MockResponse.Builder().code(302).addHeader("Location", "https://auth.example.test/").build())
+        val (ops, repo) = opsFor(origin, stored)
+        assertFalse(ops.refreshSsoOrigins("t9"))
+        assertFalse(ops.refreshSsoOrigins("t9"))
+        assertEquals(stored, repo.read().byId("t9")!!.ssoOrigins)
+    }
+
+    /** The server stopped advertising (or never had the route): the list goes. */
+    @Test
+    fun aServerThatAdvertisesNoneClearsTheList() = runBlocking {
+        val origin = webServer(json(404, "{}"))
+        val (ops, repo) = opsFor(origin, listOf("https://auth.example.test"))
+        assertTrue(ops.refreshSsoOrigins("t9"))
+        assertEquals(emptyList<String>(), repo.read().byId("t9")!!.ssoOrigins)
+    }
 }

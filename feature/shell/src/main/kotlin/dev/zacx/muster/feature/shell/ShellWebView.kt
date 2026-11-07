@@ -19,7 +19,9 @@ import java.time.Instant
 /**
  * The hardened WebView (docs/design/android.md, "The shell"):
  *
- * - one origin; other https links go to a Custom Tab ([ShellNavigation]);
+ * - one origin; other https links go to a Custom Tab ([ShellNavigation]),
+ *   except the tenant's advertised sign-in origins, which load but get no
+ *   bridge, no script and no grant ([OriginPolicy]);
  * - no file or content access, no `addJavascriptInterface`;
  * - the bridge is `WebViewCompat.addWebMessageListener` named `musterApp`,
  *   restricted to the exact origin (never `*`), main frame only;
@@ -129,6 +131,11 @@ object ShellWebView {
         }
         // Without WEB_MESSAGE_LISTENER (a very old WebView) there is no bridge:
         // the page then shows no "Pair this phone" button, and nothing pairs.
+
+        // A tenant behind a sign-in gate: an expired gate cookie reloads the
+        // page into sign-in instead of silently stalling htmx and SSE. Muster
+        // origin only; a tenant with no sign-in origins gets nothing.
+        SsoSessionGuard.install(webView, policy)
     }
 
     private class Client(private val policy: OriginPolicy, private val cb: Callbacks) : WebViewClient() {

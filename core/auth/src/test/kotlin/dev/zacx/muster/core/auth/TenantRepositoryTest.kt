@@ -241,4 +241,21 @@ class TenantRepositoryTest {
         assertFalse(disk.contains("BBBBBBBB"))
         assertFalse(disk.contains("b.example.test"))
     }
+
+    // --- sign-in origins -----------------------------------------------------------------
+
+    /** A tenant stored before the field existed reads with none; a stored list survives a restart, per tenant. */
+    @Test
+    fun signInOriginsArePerTenantAndPersist() {
+        oldAppWrites(paired)
+        open { repo, _ -> repo.add(originB, multiProfile = true) } // t1
+        assertEquals(emptyList<String>(), open { repo, _ -> repo.read() }.byId(Tenants.DEFAULT)!!.ssoOrigins)
+        assertTrue(open { repo, _ -> repo.setSsoOrigins("t1", listOf("https://auth.example.test")) })
+        assertFalse("the same list again changes nothing", open { repo, _ -> repo.setSsoOrigins("t1", listOf("https://auth.example.test")) })
+        assertFalse("a tenant that does not exist is not created", open { repo, _ -> repo.setSsoOrigins("nope", listOf("https://x.example.test")) })
+        val t = open { repo, _ -> repo.read() }
+        assertEquals(listOf("https://auth.example.test"), t.byId("t1")!!.ssoOrigins)
+        assertEquals("the other tenant is untouched", emptyList<String>(), t.byId(Tenants.DEFAULT)!!.ssoOrigins)
+        assertEquals(listOf(Tenants.DEFAULT, "t1"), t.all.map { it.id })
+    }
 }

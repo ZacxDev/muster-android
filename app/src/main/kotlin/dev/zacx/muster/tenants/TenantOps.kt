@@ -6,6 +6,7 @@ import dev.zacx.muster.core.auth.Tenants
 import dev.zacx.muster.core.net.DeviceApi
 import dev.zacx.muster.feature.notify.NotifyTenant
 import dev.zacx.muster.feature.push.PushRegistrar
+import dev.zacx.muster.feature.shell.OriginPolicy
 import dev.zacx.muster.feature.shell.TenantSessions
 import dev.zacx.muster.shell.ShellLocalState
 import kotlinx.coroutines.CoroutineDispatcher
@@ -36,6 +37,26 @@ class TenantOps(
 ) {
     /** Adds the server at [origin] (normalised by OriginPolicy), unpaired and current. */
     suspend fun add(origin: String): TenantRepository.AddResult = repo.add(origin, multiProfile())
+
+    /**
+     * Reads tenant [id]'s advertised sign-in origins from its server
+     * ([DeviceApi.webOrigins], no credential) and stores them, normalised
+     * ([OriginPolicy.normaliseSsoOrigin]; anything else, and the muster origin
+     * itself, dropped). A muster without the route stores none. A failed read
+     * keeps what is stored: a network blip never drops a working sign-in, and
+     * never adds one. True when the stored list changed.
+     */
+    suspend fun refreshSsoOrigins(id: String): Boolean {
+        val t = repo.read().byId(id) ?: return false
+        val answer = withContext(io) { runCatching { api(t.origin).webOrigins() }.getOrNull() }
+        val origins = when (answer) {
+            is DeviceApi.WebOrigins.Advertised -> answer.ssoOrigins.mapNotNull(OriginPolicy::normaliseSsoOrigin)
+                .filter { it != t.origin }.distinct().take(OriginPolicy.MAX_SSO_ORIGINS)
+            DeviceApi.WebOrigins.NotOffered -> emptyList()
+            is DeviceApi.WebOrigins.Failed, null -> return false
+        }
+        return repo.setSsoOrigins(id, origins)
+    }
 
     /**
      * Removes tenant [id]. The record goes FIRST, so a push arriving during
