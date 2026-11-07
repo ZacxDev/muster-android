@@ -34,7 +34,7 @@ class QuestionTextAndAlertTest {
     @Before
     fun setUp() {
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
-        notifier = AndroidNotifier(app) { tag, _ ->
+        notifier = AndroidNotifier(app, LEGACY) { tag, _ ->
             PendingIntent.getActivity(app, tag.hashCode(), Intent("test.OPEN"), PendingIntent.FLAG_IMMUTABLE)
         }
     }
@@ -45,7 +45,7 @@ class QuestionTextAndAlertTest {
         notifier.show((p as Push.Show).payload)
     }
 
-    private fun shown(tag: String): Notification = shadowOf(nm).activeNotifications.single { it.tag == tag }.notification
+    private fun shown(tag: String): Notification = shadowOf(nm).activeNotifications.single { it.tag == LEGACY.namespace(tag) }.notification
 
     private val question = "Ship the migration tonight? The backup finished an hour ago and the staging run was green.\nOptions: ship it · wait for Monday"
 
@@ -77,7 +77,7 @@ class QuestionTextAndAlertTest {
     fun anUpdateRePushWithNothingShowingIsPostedSilent() {
         push(ask(update = false))
         assertEquals(1, shadowOf(nm).activeNotifications.size)
-        nm.cancel("attention-ask-41", AndroidNotifier.ID) // the user's swipe, or a first push that never arrived
+        nm.cancel(LEGACY.namespace("attention-ask-41"), AndroidNotifier.ID) // the user's swipe, or a first push that never arrived
         push(ask(update = true))
         val n = shown("attention-ask-41")
         assertEquals(Notification.GROUP_ALERT_SUMMARY, n.groupAlertBehavior)

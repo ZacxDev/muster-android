@@ -28,7 +28,7 @@ class RecordingSink : NotificationSink {
         shown += payload
     }
 
-    override fun withdraw(tag: String) {
-        withdrawn += tag
+    override fun withdraw(serverTag: String) {
+        withdrawn += serverTag
     }
 }

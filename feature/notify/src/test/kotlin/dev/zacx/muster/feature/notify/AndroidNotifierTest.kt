@@ -28,7 +28,7 @@ class AndroidNotifierTest {
     @Before
     fun setUp() {
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
-        notifier = AndroidNotifier(app) { tag, path ->
+        notifier = AndroidNotifier(app, LEGACY) { tag, path ->
             taps += tag to path
             PendingIntent.getActivity(app, tag.hashCode(), Intent("test.OPEN"), PendingIntent.FLAG_IMMUTABLE)
         }
@@ -46,8 +46,8 @@ class AndroidNotifierTest {
         assertEquals(Notification.VISIBILITY_PRIVATE, n.visibility)
         val pub = assertNotNull(n.publicVersion).let { n.publicVersion }
         assertEquals("Agent ada", pub.extras.getString(Notification.EXTRA_TITLE))
-        assertEquals(listOf("att-9" to "/attention"), taps)
-        assertEquals("att-9", shadowOf(nm).activeNotifications.single().tag)
+        assertEquals(listOf("default:att-9" to "/attention"), taps)
+        assertEquals("default:att-9", shadowOf(nm).activeNotifications.single().tag)
     }
 
     @Test
@@ -64,7 +64,7 @@ class AndroidNotifierTest {
         notifier.show(PayloadV2("review", "43", "task-43", "B", "three", null))
         assertEquals(2, shadowOf(nm).activeNotifications.size)
         notifier.withdraw("task-42")
-        assertEquals(listOf("task-43"), shadowOf(nm).activeNotifications.map { it.tag })
+        assertEquals(listOf("default:task-43"), shadowOf(nm).activeNotifications.map { it.tag })
     }
 
     @Test
@@ -76,7 +76,7 @@ class AndroidNotifierTest {
 
     @Test
     fun phaseOneCreatesExactlyTheChannelsItPostsTo() {
-        Channels.ensure(app)
+        Channels.ensure(app, LEGACY)
         assertEquals(setOf(Channels.ASKS, Channels.TASKS), nm.notificationChannels.map { it.id }.toSet())
         assertEquals(NotificationManager.IMPORTANCE_HIGH, nm.getNotificationChannel(Channels.ASKS).importance)
     }

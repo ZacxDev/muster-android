@@ -114,32 +114,17 @@ class ShellLocalStateTest {
         assertFalse(image.exists())
     }
 
+    /** One server forgotten while another is still paired: the picture goes, the job stays for the other. */
     @Test
-    fun changingServerForgetsCookiesPictureJobAndServer() = runBlocking {
-        val store = MemStore(DeviceRecord(origin = origin))
+    fun forgettingOneServerWhileAnotherIsPairedKeepsTheJob() = runBlocking {
         saved()
         scheduled()
-        assertEquals(WorkInfo.State.ENQUEUED, jobState())
-        var cookies = 0
-        assertTrue(local.changeServer(store) { cookies++ })
-        assertEquals(1, cookies)
+        local.forget(cancelRefresh = false)
         assertFalse(image.exists())
-        assertEquals(WorkInfo.State.CANCELLED, jobState())
-        assertEquals(DeviceRecord(), store.value)
-    }
-
-    @Test
-    fun aPairedPhoneCannotChangeServer() = runBlocking {
-        val record = DeviceRecord(origin = origin, token = token, deviceId = 1)
-        val store = MemStore(record)
-        saved()
-        scheduled()
-        var cookies = 0
-        assertFalse(local.changeServer(store) { cookies++ })
-        assertEquals(0, cookies)
-        assertTrue(image.exists())
         assertEquals(WorkInfo.State.ENQUEUED, jobState())
-        assertEquals(record, store.value)
+        // Control: the last paired server forgotten cancels it.
+        local.forget()
+        assertEquals(WorkInfo.State.CANCELLED, jobState())
     }
 
     @Test
@@ -192,6 +177,25 @@ class ShellLocalStateTest {
             assertEquals(listOf("muster-stepup-old"), deleted)
             assertFalse(image.exists())
             assertEquals(WorkInfo.State.CANCELLED, jobState())
+        }
+    }
+
+    /** A revocation of one server while another is still paired: its key and the picture go, the job stays. */
+    @Test
+    fun aRevocationWhileAnotherServerIsPairedKeepsTheJob() = runBlocking {
+        MockWebServer().use { server ->
+            server.start()
+            server.enqueue(MockResponse.Builder().code(401).body("""{"error":"this route takes a paired device credential (mdv_…)"}""").build())
+            val srv = server.url("/").toString().trimEnd('/')
+            val store = MemStore(DeviceRecord(origin = srv, token = token, deviceId = 1, keyAlias = "muster-stepup-a"))
+            saved()
+            scheduled()
+            val deleted = mutableListOf<String>()
+            val r = MusterApp.newRegistrar(store, ::DeviceApi, { deleted += it }, local, stillPaired = { true })
+            assertEquals(PushRegistrar.ConfigResult.Revoked, r.refreshConfig())
+            assertEquals(listOf("muster-stepup-a"), deleted)
+            assertFalse(image.exists())
+            assertEquals(WorkInfo.State.ENQUEUED, jobState())
         }
     }
 

@@ -34,6 +34,7 @@ class AskButtonsTest {
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         notifier = AndroidNotifier(
             app,
+            LEGACY,
             action = { tag, i, _, _, a ->
                 built += Triple(tag, i, a)
                 PendingIntent.getActivity(app, i, Intent("test.STEP_UP").setData(Uri.parse("t:$tag#$i")), PendingIntent.FLAG_IMMUTABLE)
@@ -43,6 +44,9 @@ class AskButtonsTest {
 
     private val tag = "attention-ask-41"
 
+    /** The tag the notification is posted (and its buttons built) under. */
+    private val posted = LEGACY.namespace(tag)
+
     private fun push(askJson: String, actionsJson: String) {
         val p = PayloadV2Parser.parse(
             """{"v":2,"type":"attention","id":"ask-41","tag":"$tag","title":"chief is asking","body":"Ship it?\nOptions: ship it · wait",
@@ -51,7 +55,7 @@ class AskButtonsTest {
         notifier.show((p as Push.Show).payload)
     }
 
-    private fun shown(): Notification = shadowOf(nm).activeNotifications.single { it.tag == tag }.notification
+    private fun shown(): Notification = shadowOf(nm).activeNotifications.single { it.tag == posted }.notification
 
     private fun labels(n: Notification) = n.actions.orEmpty().map { it.title.toString() }
 
@@ -65,7 +69,7 @@ class AskButtonsTest {
         push("""{"id":41,"suggestions":["After the backup"]}""", """[{"id":"ask_answer","target":"41","suggestion":0},{"id":"ask_dismiss","label":"Dismiss","target":"41"}]""")
         assertEquals(listOf("Dismiss"), labels(shown()))
         assertEquals(listOf(0 to null), built.map { it.second to it.third.answer })
-        assertTrue(built.all { it.first == tag })
+        assertTrue(built.all { it.first == posted })
     }
 
     /** One option and suggestions: that option and Dismiss, the third slot left empty. */
@@ -89,7 +93,7 @@ class AskButtonsTest {
 
     @Test
     fun noActionFactoryOrNoAskDrawsNoButtons() {
-        AndroidNotifier(app) { t, _ -> PendingIntent.getActivity(app, t.hashCode(), Intent("test.OPEN"), PendingIntent.FLAG_IMMUTABLE) }
+        AndroidNotifier(app, LEGACY) { t, _ -> PendingIntent.getActivity(app, t.hashCode(), Intent("test.OPEN"), PendingIntent.FLAG_IMMUTABLE) }
             .show((PayloadV2Parser.parse("""{"v":2,"type":"attention","tag":"$tag","title":"chief is asking","ask":{"id":41,"options":["a"]},"actions":$all}""".encodeToByteArray()) as Push.Show).payload)
         assertEquals(emptyList<String>(), labels(shown()))
     }
@@ -98,7 +102,7 @@ class AskButtonsTest {
     @Test
     fun aFailureIsShownInTheNotificationWithItsButtons() {
         push("""{"id":41,"options":["ship it","wait"]}""", all)
-        notifier.showOutcome(tag, "chief is asking", "/attention/open/ask-41", AskOutcome.Failed("Not sent: the confirmation expired. Tap the button again."))
+        notifier.showOutcome(posted, "chief is asking", "/attention/open/ask-41", AskOutcome.Failed("Not sent: the confirmation expired. Tap the button again."))
         val n = shown()
         assertEquals("Not sent: the confirmation expired. Tap the button again.", n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
         assertEquals(
@@ -112,15 +116,15 @@ class AskButtonsTest {
     @Test
     fun aSecondFailureReplacesTheFirstReason() {
         push("""{"id":41,"options":["ship it"]}""", all)
-        notifier.showOutcome(tag, "chief is asking", null, AskOutcome.Failed("first"))
-        notifier.showOutcome(tag, "chief is asking", null, AskOutcome.Failed("second"))
+        notifier.showOutcome(posted, "chief is asking", null, AskOutcome.Failed("first"))
+        notifier.showOutcome(posted, "chief is asking", null, AskOutcome.Failed("second"))
         assertEquals("second\n\nShip it?\nOptions: ship it · wait", shown().extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString())
     }
 
     @Test
     fun aQuestionAlreadySettledLosesItsButtons() {
         push("""{"id":41,"options":["ship it"]}""", all)
-        notifier.showOutcome(tag, "chief is asking", null, AskOutcome.Gone("Already answered, dismissed or expired."))
+        notifier.showOutcome(posted, "chief is asking", null, AskOutcome.Gone("Already answered, dismissed or expired."))
         val n = shown()
         assertEquals("Already answered, dismissed or expired.", n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
         assertEquals("Already answered, dismissed or expired.\n\nShip it?\nOptions: ship it · wait", n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString())
@@ -130,10 +134,10 @@ class AskButtonsTest {
     @Test
     fun sentRemovesItAndAFailureWithNothingShowingPostsOne() {
         push("""{"id":41,"options":["ship it"]}""", all)
-        notifier.showOutcome(tag, "chief is asking", null, AskOutcome.Done)
+        notifier.showOutcome(posted, "chief is asking", null, AskOutcome.Done)
         assertEquals(0, shadowOf(nm).activeNotifications.size)
 
-        notifier.showOutcome(tag, "chief is asking", "/attention/open/ask-41", AskOutcome.Failed("Not sent: muster could not be reached. Tap the button again."))
+        notifier.showOutcome(posted, "chief is asking", "/attention/open/ask-41", AskOutcome.Failed("Not sent: muster could not be reached. Tap the button again."))
         val n = shown()
         assertEquals("chief is asking", n.extras.getString(Notification.EXTRA_TITLE))
         assertEquals("Not sent: muster could not be reached. Tap the button again.", n.extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
@@ -148,7 +152,7 @@ class AskButtonsTest {
         push("""{"id":41,"options":["ship it"]}""", all)
         notifier.withdraw(tag)
         assertEquals(0, shadowOf(nm).activeNotifications.size)
-        notifier.showOutcome(tag, "chief is asking", "/attention/open/ask-41", AskOutcome.Gone("Already answered, dismissed or expired."))
+        notifier.showOutcome(posted, "chief is asking", "/attention/open/ask-41", AskOutcome.Gone("Already answered, dismissed or expired."))
         assertEquals(0, shadowOf(nm).activeNotifications.size)
     }
 

@@ -14,28 +14,34 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.PixelCopy
 import android.view.ViewGroup
-import android.webkit.CookieManager
 import android.webkit.WebView
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.createBitmap
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import dev.zacx.muster.core.auth.DeviceRecord
 import dev.zacx.muster.core.auth.Pairing
 import dev.zacx.muster.core.auth.PushStatus
+import dev.zacx.muster.core.auth.TenantRecord
+import dev.zacx.muster.core.auth.TenantRepository
 import dev.zacx.muster.core.model.MusterPath
-import dev.zacx.muster.core.net.DeviceApi
+import dev.zacx.muster.feature.notify.Channels
 import dev.zacx.muster.feature.push.PushRegistrar
 import dev.zacx.muster.feature.shell.BridgeMessage
 import dev.zacx.muster.feature.shell.MicrophoneAccess
@@ -49,9 +55,13 @@ import dev.zacx.muster.shell.ShellCookies
 import dev.zacx.muster.shell.ShellSnapshot
 import dev.zacx.muster.shell.SnapshotOverlay
 import dev.zacx.muster.shell.SnapshotPolicy
+import dev.zacx.muster.tenants.TapRouting
+import dev.zacx.muster.tenants.notifyTenant
 import dev.zacx.muster.ui.PhoneSettingsScreen
 import dev.zacx.muster.ui.ServerUrlScreen
+import dev.zacx.muster.ui.ServersScreen
 import dev.zacx.muster.ui.StatusBanner
+import dev.zacx.muster.ui.TenantBar
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -61,13 +71,35 @@ import org.unifiedpush.android.connector.UnifiedPush
 
 /**
  * The launcher activity: the server-URL screen on first run, then the
- * WebView shell, plus the native phone-settings screen (a launcher shortcut).
+ * WebView shell for the muster server in view with the server switcher
+ * above it, plus the native server-management and phone-settings screens
+ * (a launcher shortcut, or a long press on the switcher).
+ *
+ * One WebView at a time: switching servers destroys it and builds a new one
+ * in the other server's WebView profile (feature/shell TenantSessions), whose
+ * cookies kept that server's sign-in.
  */
 class MainActivity : ComponentActivity() {
     private val app get() = MusterApp.from(this)
     private var webView: WebView? = null
     private var policy: OriginPolicy? = null
     private var reportedDrawn = false
+
+    /** The tenant whose page the shell shows, and its WebView profile; null with no shell. */
+    private var shownTenant: String? = null
+    private var shownProfile: String? = null
+
+    /**
+     * Back on the native screens (servers, settings, add server): returns to
+     * the shell. Enabled only while one is shown, so it never takes a press
+     * from the shell's own callback (ShellBack) or the page's back-claim.
+     */
+    private val screenBack = object : OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() {
+            isEnabled = false
+            lifecycleScope.launch { route(Intent()) }
+        }
+    }
 
     /** The last home-page frame (ShellSnapshot) and the background job, and when they go. */
     private val local get() = app.local
@@ -112,7 +144,24 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         onBackPressedDispatcher.addCallback(this, back)
+        onBackPressedDispatcher.addCallback(this, screenBack)
         lifecycleScope.launch { route(intent) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // A server removed or switched elsewhere (the background job, another
+        // window): the shell follows the tenant in view.
+        val shown = shownTenant ?: return
+        lifecycleScope.launch {
+            val t = app.tenants.read()
+            val active = t.active
+            when {
+                webView == null || shownTenant != shown -> Unit
+                active == null -> route(Intent())
+                active.id != shown -> showShell(active, null)
+            }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -123,20 +172,30 @@ class MainActivity : ComponentActivity() {
 
     private suspend fun route(intent: Intent) {
         // A plain launch opens the home page: read its last frame while the
-        // device record is read (both are disk; neither waits for the other).
+        // tenants are read (both are disk; neither waits for the other).
         val launchesHome = intent.action != ACTION_SETTINGS && intent.getStringExtra(EXTRA_PATH) == null && webView == null
         val stored = if (launchesHome) lifecycleScope.async(Dispatchers.IO) { runCatching { snapshot.read(hardware = true) }.getOrNull() } else null
-        val record = app.store.read()
+        val tenants = app.tenants.read()
         StartupProbe.mark("store.read")
-        val origin = record.origin
-        val picture = stored?.await()?.takeIf { origin != null && SnapshotPolicy.showable(it.meta, snapshotMeta(origin)) }
+        tenants.all.forEach { Channels.ensure(this, it.notifyTenant()) }
+        tenants.notice?.let { n ->
+            AlertDialog.Builder(this).setMessage(n).setPositiveButton(android.R.string.ok, null).show()
+            app.tenants.clearNotice()
+        }
+        // The activity is exported (it is the launcher): the path is re-checked
+        // (a muster path only, and tapTarget refuses upload routes whatever
+        // AttachmentGate says), and a tap's tenant only selects which of this
+        // phone's own servers is in view.
+        val target = TapRouting.resolve(tenants, intent.getStringExtra(MusterApp.EXTRA_TENANT), MusterPath.parse(intent.getStringExtra(EXTRA_PATH)))
         when {
-            intent.action == ACTION_SETTINGS -> showSettings()
-            origin == null -> showServerUrl()
-            // The activity is exported (it is the launcher), so the path is
-            // re-checked: a muster path only, and tapTarget refuses upload
-            // routes whatever AttachmentGate says.
-            else -> showShell(origin, MusterPath.parse(intent.getStringExtra(EXTRA_PATH)), record, picture?.bitmap)
+            intent.action == ACTION_SETTINGS -> showServers()
+            target == null -> showServerUrl(adding = false)
+            else -> {
+                if (target.switched) app.tenants.select(target.tenant.id)
+                val origin = target.tenant.origin
+                val picture = stored?.await()?.takeIf { SnapshotPolicy.showable(it.meta, snapshotMeta(origin)) }
+                showShell(target.tenant, target.path, picture?.bitmap)
+            }
         }
     }
 
@@ -145,17 +204,25 @@ class MainActivity : ComponentActivity() {
 
     // --- first run --------------------------------------------------------------------
 
-    private fun showServerUrl() {
+    /** First run ([adding] false), or Add server: a server's URL, which becomes a new tenant, unpaired and in view. */
+    private fun showServerUrl(adding: Boolean) {
         dropWebView()
+        screenBack.isEnabled = adding
         setContent {
             MaterialTheme {
-                ServerUrlScreen { url ->
-                    val p = OriginPolicy.forServer(url.trim()) ?: return@ServerUrlScreen false
+                ServerUrlScreen(adding = adding, onCancel = if (adding) ({ lifecycleScope.launch { route(Intent()) } }) else null) { url ->
+                    val p = OriginPolicy.forServer(url.trim()) ?: return@ServerUrlScreen getString(R.string.url_invalid)
                     lifecycleScope.launch {
-                        app.store.update { DeviceRecord(origin = p.allowedOriginRule) }
-                        route(Intent())
+                        when (val r = app.ops.add(p.allowedOriginRule)) {
+                            is TenantRepository.AddResult.Added -> route(Intent())
+                            // Already one of this phone's servers: switch to it.
+                            is TenantRepository.AddResult.Duplicate -> { app.tenants.select(r.tenant.id); route(Intent()) }
+                            TenantRepository.AddResult.NeedsWebViewProfiles -> AlertDialog.Builder(this@MainActivity)
+                                .setTitle(R.string.webview_update_title).setMessage(R.string.webview_update)
+                                .setPositiveButton(android.R.string.ok, null).show()
+                        }
                     }
-                    true
+                    null
                 }
             }
         }
@@ -163,20 +230,39 @@ class MainActivity : ComponentActivity() {
 
     // --- the shell --------------------------------------------------------------------
 
-    private fun showShell(origin: String, path: String?, record: DeviceRecord, picture: Bitmap? = null) {
-        val p = OriginPolicy.forServer(origin) ?: return showServerUrl()
+    /**
+     * The shell for tenant [t]: its page at [path] on ITS origin. The same
+     * tenant already on screen just loads the path; any other tenant gets a
+     * new WebView in its own profile (the old one is destroyed first).
+     */
+    private fun showShell(t: TenantRecord, path: String?, picture: Bitmap? = null) {
+        val p = OriginPolicy.forServer(t.origin) ?: return showServerUrl(adding = false)
         val target = ShellNavigation.tapTarget(path, p)
         val existing = webView
-        if (existing != null && policy?.allowedOriginRule == p.allowedOriginRule) {
+        screenBack.isEnabled = false
+        if (existing != null && shownTenant == t.id && policy?.allowedOriginRule == p.allowedOriginRule) {
             if (path != null) existing.loadUrl(target)
             return
         }
+        dropWebView()
         policy = p
+        shownTenant = t.id
+        shownProfile = t.webProfile
         val shell = ++shellGeneration
+        val bar = ComposeView(this).apply {
+            setContent {
+                MaterialTheme {
+                    val tenants by app.tenants.tenants.collectAsState(initial = null)
+                    tenants?.let { all ->
+                        TenantBar(all, onSelect = ::switchTo, onManage = { showServers() }, onAdd = { showServerUrl(adding = true) })
+                    }
+                }
+            }
+        }
         val banner = ComposeView(this).apply {
             setContent {
                 MaterialTheme {
-                    StatusBanner(app.store.records, keyInvalidated = ::keyInvalidated, onDetails = { openSettings() })
+                    StatusBanner(app.store(t.id).records, keyInvalidated = { keyInvalidated(t.id) }, onDetails = { showServers(detail = t.id) })
                 }
             }
         }
@@ -191,6 +277,7 @@ class MainActivity : ComponentActivity() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(SHELL_BACKGROUND)
+            addView(bar, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(banner, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             addView(page, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         }
@@ -198,7 +285,7 @@ class MainActivity : ComponentActivity() {
         setContentView(root)
         val attach = {
             // A newer shell (or none) replaced this one before it got its WebView.
-            if (shell == shellGeneration && policy === p) attachWebView(page, p, target, record)
+            if (shell == shellGeneration && policy === p) attachWebView(page, p, target, t)
         }
         if (overlay != null) {
             // The picture reaches the screen first: constructing the WebView
@@ -214,11 +301,19 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** The shell's WebView, under the picture if there is one, then the load. */
-    private fun attachWebView(page: FrameLayout, p: OriginPolicy, target: String, record: DeviceRecord) {
+    /** The shell's WebView in tenant [t]'s profile, under the picture if there is one, then the load. */
+    private fun attachWebView(page: FrameLayout, p: OriginPolicy, target: String, t: TenantRecord) {
         StartupProbe.mark("webview.new.start")
         val wv = WebView(this)
         StartupProbe.mark("webview.new.end")
+        // 🔴 Its own profile before anything loads: no other server's cookies.
+        if (!app.sessions.prepare(wv, t.webProfile)) {
+            wv.destroy()
+            overlay?.dismiss()
+            AlertDialog.Builder(this).setTitle(R.string.webview_update_title).setMessage(R.string.webview_update)
+                .setPositiveButton(android.R.string.ok, null).show()
+            return
+        }
         // muster's own background (its dark theme-color), not the WebView's
         // white, until the page paints.
         wv.setBackgroundColor(SHELL_BACKGROUND)
@@ -229,7 +324,16 @@ class MainActivity : ComponentActivity() {
         back.onWebViewChanged()
         StartupProbe.mark("webview.loadUrl")
         wv.loadUrl(target)
-        if (record.paired) refreshPush(registerIfNeeded = record.pushStatus != PushStatus.REGISTERED)
+        if (t.device.paired) refreshPush(t.id, registerIfNeeded = t.device.pushStatus != PushStatus.REGISTERED)
+    }
+
+    /** The switcher's pick: [id] becomes the tenant in view, and the shell reloads on its server. */
+    private fun switchTo(id: String) {
+        lifecycleScope.launch {
+            if (!app.tenants.select(id)) return@launch
+            val t = app.tenants.read().byId(id) ?: return@launch
+            showShell(t, null)
+        }
     }
 
     private fun shellCallbacks(p: OriginPolicy) = object : ShellWebView.Callbacks {
@@ -338,7 +442,7 @@ class MainActivity : ComponentActivity() {
             if (!refreshScheduled) {
                 // Off the start-up path: after the first commit, on a background thread; paired phones only.
                 refreshScheduled = true
-                app.scope.launch { local.syncRefresh(app.store.read().paired) }
+                app.scope.launch { local.syncRefresh(app.tenants.read().all.any { it.device.paired }) }
             }
         }
         val o = overlay ?: return
@@ -380,30 +484,35 @@ class MainActivity : ComponentActivity() {
         // sign-out (both seen on the emulator, a few seconds after signing).
         // Native code still never reads them.
         // Only with a WebView, and never a crash (ShellCookies).
-        ShellCookies.flushOnPause(webView)
+        val profile = shownProfile
+        ShellCookies.flushOnPause(webView) { profile?.let(app.sessions::flush) }
         super.onPause()
     }
 
     // --- pairing ----------------------------------------------------------------------
 
+    /**
+     * A pairing code from the page on [origin]: it pairs the tenant AT that
+     * origin and no other (origins are unique per tenant, so this is exact).
+     */
     private fun confirmPairing(origin: String, code: String, expiresAt: Instant?) {
         lifecycleScope.launch {
-            val already = app.store.read().paired
+            val t = app.tenants.read().byOrigin(origin) ?: return@launch
             val msg = getString(R.string.pair_confirm, origin) +
-                if (already) "\n\n" + getString(R.string.pair_replaces) else ""
+                if (t.device.paired) "\n\n" + getString(R.string.pair_replaces) else ""
             AlertDialog.Builder(this@MainActivity)
                 .setTitle(R.string.pair_title)
                 .setMessage(msg)
-                .setPositiveButton(R.string.pair_ok) { _, _ -> pair(origin, code, expiresAt) }
+                .setPositiveButton(R.string.pair_ok) { _, _ -> pair(t.id, origin, code, expiresAt) }
                 .setNegativeButton(android.R.string.cancel, null)
                 .show()
         }
     }
 
-    private fun pair(origin: String, code: String, expiresAt: Instant?) {
+    private fun pair(id: String, origin: String, code: String, expiresAt: Instant?) {
         lifecycleScope.launch {
             // Pairing re-checks expires_at now, at the tap, before anything else.
-            val out = app.pairing(origin).pair(code, expiresAt, MusterApp.deviceName(), appVersion())
+            val out = app.pairing(id, origin).pair(code, expiresAt, MusterApp.deviceName(), appVersion())
             val (title, text) = when (out) {
                 is Pairing.Outcome.Paired -> getString(R.string.paired_title) to
                     (out.note ?: getString(R.string.paired_biometric))
@@ -414,7 +523,7 @@ class MainActivity : ComponentActivity() {
             if (out is Pairing.Outcome.Paired) {
                 askNotificationPermission()
                 app.scope.launch { local.syncRefresh(paired = true) }
-                refreshPush(registerIfNeeded = true)
+                refreshPush(id, registerIfNeeded = true)
                 webView?.reload()
             }
         }
@@ -430,12 +539,18 @@ class MainActivity : ComponentActivity() {
 
     // --- push -------------------------------------------------------------------------
 
-    /** Reads /api/device/config (and so notices a revoked pairing); registers push when asked. */
-    private fun refreshPush(registerIfNeeded: Boolean) {
+    /**
+     * Reads tenant [id]'s /api/device/config (and so notices a revoked
+     * pairing); registers its push instance when asked.
+     */
+    private fun refreshPush(id: String, registerIfNeeded: Boolean) {
         lifecycleScope.launch {
-            val r = app.registrar.refreshConfig()
+            val t = app.tenants.read().byId(id) ?: return@launch
+            val registrar = app.registrarFor(id)
+            val instance = t.pushInstance
+            val r = registrar.refreshConfig()
             if (r is PushRegistrar.ConfigResult.Revoked) {
-                runCatching { MusterPushService.unregister(this@MainActivity) }
+                runCatching { MusterPushService.unregister(this@MainActivity, instance) }
                 return@launch
             }
             if (r is PushRegistrar.ConfigResult.Failed) {
@@ -446,69 +561,82 @@ class MainActivity : ComponentActivity() {
             if (r !is PushRegistrar.ConfigResult.Register || !registerIfNeeded) return@launch
             UnifiedPush.tryUseCurrentOrDefaultDistributor(this@MainActivity) { ok ->
                 when {
-                    ok -> MusterPushService.register(this@MainActivity, r.vapidKey)
+                    ok -> MusterPushService.register(this@MainActivity, instance, r.vapidKey)
                     UnifiedPush.getDistributors(this@MainActivity).isNotEmpty() ->
                         UnifiedPush.tryPickDistributor(this@MainActivity) { picked ->
-                            if (picked) MusterPushService.register(this@MainActivity, r.vapidKey)
-                            else lifecycleScope.launch { app.registrar.noDistributor() }
+                            if (picked) MusterPushService.register(this@MainActivity, instance, r.vapidKey)
+                            else lifecycleScope.launch { registrar.noDistributor() }
                         }
-                    else -> lifecycleScope.launch { app.registrar.noDistributor() }
+                    else -> lifecycleScope.launch { registrar.noDistributor() }
                 }
             }
         }
     }
 
-    // --- phone settings ---------------------------------------------------------------
+    // --- servers and phone settings ----------------------------------------------------
 
-    private fun openSettings() {
-        startActivity(Intent(this, MainActivity::class.java).setAction(ACTION_SETTINGS))
-    }
-
-    private fun showSettings() {
+    /**
+     * Server management, in this activity (the switcher's long press, Manage
+     * servers, the launcher shortcut). [detail]: open that server's phone
+     * settings directly. Back returns to the shell.
+     */
+    private fun showServers(detail: String? = null) {
         dropWebView()
+        screenBack.isEnabled = true // back: the shell (or, with no server left, the first-run screen)
         setContent {
             MaterialTheme {
-                PhoneSettingsScreen(
-                    records = app.store.records,
-                    keyInvalidated = ::keyInvalidated,
-                    notificationsEnabled = {
-                        androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()
-                    },
-                    onNotificationSettings = ::openNotificationSettings,
-                    onRetryPush = { refreshPush(registerIfNeeded = true) },
-                    onUnpair = ::unpair,
-                    onChangeServer = ::changeServer,
-                    onClose = { finish() },
-                )
+                val tenants by app.tenants.tenants.collectAsState(initial = null)
+                var open by remember { mutableStateOf(detail) }
+                val all = tenants ?: return@MaterialTheme
+                val t = all.byId(open)
+                if (t != null) {
+                    PhoneSettingsScreen(
+                        title = t.label,
+                        records = app.store(t.id).records,
+                        keyInvalidated = { keyInvalidated(t.id) },
+                        notificationsEnabled = {
+                            androidx.core.app.NotificationManagerCompat.from(this).areNotificationsEnabled()
+                        },
+                        onNotificationSettings = ::openNotificationSettings,
+                        onRetryPush = { refreshPush(t.id, registerIfNeeded = true) },
+                        onUnpair = { unpair(t.id) },
+                        onRemoveServer = { open = null; removeServer(t.id) },
+                        onClose = { open = null },
+                    )
+                } else {
+                    ServersScreen(
+                        tenants = all,
+                        onOpen = { id -> lifecycleScope.launch { app.tenants.select(id); route(Intent()) } },
+                        onSettings = { id -> open = id },
+                        onRemove = ::removeServer,
+                        onAdd = { showServerUrl(adding = true) },
+                        onDismissNotice = { lifecycleScope.launch { app.tenants.clearNotice() } },
+                        onClose = if (all.all.isNotEmpty()) ({ lifecycleScope.launch { route(Intent()) } }) else null,
+                    )
+                }
             }
         }
     }
 
-    private suspend fun keyInvalidated(): Boolean = withContext(Dispatchers.IO) {
-        val alias = app.store.read().keyAlias
+    private suspend fun keyInvalidated(id: String): Boolean = withContext(Dispatchers.IO) {
+        val alias = app.store(id).read().keyAlias
         alias != null && runCatching { app.keys.state(alias) }.getOrNull() != dev.zacx.muster.core.auth.StepUpKeys.KeyState.VALID
     }
 
-    private fun unpair() {
+    /** Unpairs this phone from tenant [id] only; the server stays, to pair again. */
+    private fun unpair(id: String) {
         lifecycleScope.launch {
-            val r = app.store.read()
-            val (origin, token) = r.origin to r.token
-            if (origin != null && token != null) {
-                withContext(Dispatchers.IO) { runCatching { DeviceApi(origin).unpair(token) } }
-            }
-            runCatching { MusterPushService.unregister(this@MainActivity) }
-            r.keyAlias?.let { a -> withContext(Dispatchers.IO) { runCatching { app.keys.delete(a) } } }
-            // The record loses its pairing; the picture and the background job go with it.
-            local.markUnpaired(app.store)
+            app.ops.unpair(id)
             Toast.makeText(this@MainActivity, R.string.unpaired, Toast.LENGTH_LONG).show()
         }
     }
 
-    /** Only while unpaired: forget the server and its cookies, back to the first-run screen. */
-    private fun changeServer() {
+    /** Removes tenant [id] (TenantOps.remove); with none left, back to the first-run screen. */
+    private fun removeServer(id: String) {
         lifecycleScope.launch {
-            if (!local.changeServer(app.store) { CookieManager.getInstance().removeAllCookies(null) }) return@launch
-            startActivity(Intent(this@MainActivity, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TASK or Intent.FLAG_ACTIVITY_NEW_TASK))
+            val gone = app.ops.remove(id) ?: return@launch
+            Toast.makeText(this@MainActivity, getString(R.string.server_removed, gone.label), Toast.LENGTH_LONG).show()
+            if (app.tenants.read().all.isEmpty()) route(Intent())
         }
     }
 
@@ -538,6 +666,8 @@ class MainActivity : ComponentActivity() {
         }
         webView = null
         policy = null
+        shownTenant = null
+        shownProfile = null
         back.onWebViewChanged()
     }
 

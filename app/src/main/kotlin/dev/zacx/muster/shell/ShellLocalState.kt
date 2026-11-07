@@ -16,8 +16,15 @@ import kotlinx.coroutines.withContext
  * ([RefreshSchedule]). Every rule for when they go is here, once, so the
  * activity, the job and the push registrar all drop them the same way.
  *
- * - [forget]: the pairing ended (unpaired here, or muster ended it), or the
- *   server is being changed. The picture is deleted and the job cancelled.
+ * - [forget]: a pairing ended (unpaired here, or muster ended it), or a
+ *   server was removed. The picture is deleted, and the job cancelled unless
+ *   another server is still paired.
+ *
+ * There is one picture for the whole app, recording the origin it was taken
+ * on, and it is only ever shown for that origin ([SnapshotPolicy.showable]),
+ * so one server's board never appears while another server loads. Forgetting
+ * one server may delete another's picture: that costs one blank start, never
+ * a wrong one.
  * - [onCommit]: a page of the shell committed. Landing on muster's sign-in
  *   page, or the home load landing anywhere but `/`, deletes the picture.
  * - [syncRefresh]: the job is scheduled only while the phone is paired; an
@@ -29,10 +36,14 @@ class ShellLocalState(
     /** One writer at a time for the snapshot's two files. */
     val io: CoroutineDispatcher = snapshotIo,
 ) {
-    /** Deletes the picture and cancels the job. Safe to call from any thread, any number of times. */
-    suspend fun forget() {
+    /**
+     * Deletes the picture and, when [cancelRefresh], cancels the job (false
+     * while another server is still paired). Safe to call from any thread,
+     * any number of times.
+     */
+    suspend fun forget(cancelRefresh: Boolean = true) {
         withContext(io) { runCatching { snapshot.delete() } }
-        cancelRefresh()
+        if (cancelRefresh) cancelRefresh()
     }
 
     /** Cancels the job only (it found the phone unpaired). */
@@ -40,23 +51,10 @@ class ShellLocalState(
         withContext(Dispatchers.Default) { runCatching { RefreshSchedule.cancel(workManager()) } }
     }
 
-    /** The phone unpaired itself: the record loses its pairing, then [forget]. */
-    suspend fun markUnpaired(store: DeviceStore) {
+    /** The phone unpaired itself from one server: its record loses its pairing, then [forget]. */
+    suspend fun markUnpaired(store: DeviceStore, cancelRefresh: Boolean = true) {
         store.update(DeviceRecord::unpaired)
-        forget()
-    }
-
-    /**
-     * Only while unpaired: forget the server, its cookies ([clearCookies]),
-     * the picture and the job, back to the first-run screen. False (and
-     * nothing changed) while paired.
-     */
-    suspend fun changeServer(store: DeviceStore, clearCookies: () -> Unit): Boolean {
-        if (store.read().paired) return false
-        clearCookies()
-        forget()
-        store.update { DeviceRecord() }
-        return true
+        forget(cancelRefresh)
     }
 
     /** A page of the shell committed at [url] on [origin]; [homeLoad]: it was the launcher's home load. */
@@ -64,7 +62,7 @@ class ShellLocalState(
         if (SnapshotPolicy.dropsOnCommit(url, origin, homeLoad)) withContext(io) { runCatching { snapshot.delete() } }
     }
 
-    /** Schedules the job when [paired]; an unpaired phone schedules nothing (and opens no WorkManager). */
+    /** Schedules the job when [paired] (any server is); an unpaired phone schedules nothing (and opens no WorkManager). */
     suspend fun syncRefresh(paired: Boolean) {
         if (!paired) return
         withContext(Dispatchers.Default) { runCatching { RefreshSchedule.ensure(workManager()) } }
@@ -84,7 +82,8 @@ class ShellLocalState(
 /** The shell's cookie flush when it leaves the foreground. */
 object ShellCookies {
     /**
-     * Writes the WebView's cookies to disk, only while the shell has a
+     * Writes the WebView's cookies to disk (the current server's profile:
+     * the app passes [flush]), only while the shell has a
      * WebView ([webView] non-null): with none (the first-run or settings
      * screen) there is nothing to flush, and `CookieManager.getInstance()`
      * would start Chromium for nothing. A throw (a WebView missing or

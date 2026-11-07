@@ -6,6 +6,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import dev.zacx.muster.feature.notify.AndroidNotifier
+import dev.zacx.muster.feature.notify.NotifyTenant
 import dev.zacx.muster.feature.push.PushHandler
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -35,7 +36,7 @@ class PushToNotificationTest {
     fun setUp() {
         shadowOf(app).grantPermissions(android.Manifest.permission.POST_NOTIFICATIONS)
         handler = PushHandler(
-            AndroidNotifier(app) { tag, _ ->
+            AndroidNotifier(app, NotifyTenant("default", "m.example.test", 0, legacy = true)) { tag, _ ->
                 PendingIntent.getActivity(app, tag.hashCode(), Intent("test.OPEN"), PendingIntent.FLAG_IMMUTABLE)
             },
         )

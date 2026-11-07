@@ -19,8 +19,8 @@ class TapIntentTest {
     @Test
     fun collidingTagsDoNotShareATapIntent() {
         assertEquals("Aa".hashCode(), "BB".hashCode())
-        val a = MusterApp.tapPendingIntent(app, "Aa", "/tasks/1")
-        val b = MusterApp.tapPendingIntent(app, "BB", "/tasks/2")
+        val a = MusterApp.tapPendingIntent(app, "t1", "Aa", "/tasks/1")
+        val b = MusterApp.tapPendingIntent(app, "t1", "BB", "/tasks/2")
         assertNotEquals(a, b)
         assertEquals("/tasks/1", shadowOf(a).savedIntent.getStringExtra(MainActivity.EXTRA_PATH))
         assertEquals("/tasks/2", shadowOf(b).savedIntent.getStringExtra(MainActivity.EXTRA_PATH))
