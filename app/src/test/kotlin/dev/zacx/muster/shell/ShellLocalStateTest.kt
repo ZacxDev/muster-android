@@ -114,6 +114,16 @@ class ShellLocalStateTest {
         assertFalse(image.exists())
     }
 
+    /** The server's sign-in gate sending a later page to its identity provider deletes the picture. */
+    @Test
+    fun theGateSendingAPageToSignInDeletesThePicture() = runBlocking {
+        saved()
+        local.onCommit("https://idp.example.test/authorize?x=1", origin, homeLoad = false)
+        assertTrue("control: without a sign-in list it is just another origin", image.exists())
+        local.onCommit("https://idp.example.test/authorize?x=1", origin, homeLoad = false, ssoOrigins = listOf("https://idp.example.test"))
+        assertFalse(image.exists())
+    }
+
     /** One server forgotten while another is still paired: the picture goes, the job stays for the other. */
     @Test
     fun forgettingOneServerWhileAnotherIsPairedKeepsTheJob() = runBlocking {

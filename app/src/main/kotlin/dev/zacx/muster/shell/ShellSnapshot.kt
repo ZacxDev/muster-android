@@ -22,7 +22,9 @@ import java.io.File
  *   ([SnapshotPolicy]). A notification tap opens another page and shows no
  *   picture.
  * - **Dropped when it would be wrong:** any page of the shell landing on
- *   muster's sign-in page (sign-out, an expired session) and the home load
+ *   muster's sign-in page (sign-out, an expired session) or on one of the
+ *   server's sign-in origins (its sign-in gate sent the page to the identity
+ *   provider: the gate's session ended), and the home load
  *   landing anywhere but `/` delete it; "change server", unpairing and
  *   muster ending the pairing delete it ([ShellLocalState.forget]); a
  *   different server or screen shape is never shown.
@@ -133,13 +135,25 @@ object SnapshotPolicy {
     const val SIGN_IN_PATH = "/login"
 
     /**
-     * A commit at [url] deletes the snapshot: any page reaching sign-in
-     * (signed out, the session expired: the stored board is no longer this
-     * user's to see), or the home load ([homeLoad]) landing anywhere but the
-     * home page (its picture is wrong now).
+     * A page committing on one of the server's advertised sign-in origins
+     * ([ssoOrigins]): its sign-in gate sent the page to the identity
+     * provider, so the gate's session (and with it the board) is over.
      */
-    fun dropsOnCommit(url: String?, origin: String, homeLoad: Boolean): Boolean =
-        isSignIn(url, origin) || (homeLoad && !isHome(url, origin))
+    fun isGateSignIn(url: String?, origin: String, ssoOrigins: List<String>): Boolean {
+        if (url == null || ssoOrigins.isEmpty()) return false
+        return OriginPolicy.forServer(origin, ssoOrigins)?.allowsSsoInWebView(url) ?: false
+    }
+
+    /**
+     * A commit at [url] deletes the snapshot: any page reaching sign-in
+     * (muster's own, or the server's sign-in gate sending it to an identity
+     * provider on one of [ssoOrigins]: signed out, the session expired, so
+     * the stored board is no longer this user's to see), or the home load
+     * ([homeLoad]) landing anywhere but the home page (its picture is wrong
+     * now).
+     */
+    fun dropsOnCommit(url: String?, origin: String, homeLoad: Boolean, ssoOrigins: List<String> = emptyList()): Boolean =
+        isSignIn(url, origin) || isGateSignIn(url, origin, ssoOrigins) || (homeLoad && !isHome(url, origin))
 
     /** The stored snapshot may be shown for [want]: same server, same screen shape. */
     fun showable(stored: ShellSnapshot.Meta, want: ShellSnapshot.Meta): Boolean = stored == want

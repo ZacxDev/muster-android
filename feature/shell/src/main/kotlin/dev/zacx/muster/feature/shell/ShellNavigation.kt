@@ -11,6 +11,10 @@ import dev.zacx.muster.core.model.AttachmentGate
  *   WebView like any muster page while the gate is open (as shipped); a
  *   non-image file then arrives as a download, handed to a Custom Tab
  *   (DownloadHandoff). With the gate closed it is refused.
+ * - One of the tenant's advertised sign-in origins ([OriginPolicy.allowsSsoInWebView])
+ *   loads in the WebView too, so an SSO gate in front of muster can set its
+ *   cookie in this tenant's profile. That is a load only: the bridge, the
+ *   document-start scripts and every grant stay on the muster origin.
  * - `https` elsewhere opens in a Custom Tab.
  * - Anything else (`javascript:`, `file:`, `intent:`, `http:`) goes nowhere.
  */
@@ -22,6 +26,8 @@ object ShellNavigation {
         policy.unparseable(url) -> Verdict.REFUSED
         policy.allowsInWebView(url) ->
             if (AttachmentGate.blocks(url, sandboxConfirmed)) Verdict.BLOCKED_ATTACHMENT else Verdict.WEBVIEW
+        // After the muster check: a sign-in origin is never the muster origin (OriginPolicy drops it).
+        policy.allowsSsoInWebView(url) -> Verdict.WEBVIEW
         url.startsWith("https://", ignoreCase = true) -> Verdict.CUSTOM_TAB
         else -> Verdict.REFUSED
     }
@@ -49,6 +55,7 @@ object ShellNavigation {
         if (path == null) return home
         val url = policy.allowedOriginRule + path
         if (AttachmentGate.isUploadRoute(url)) return home
-        return if (decide(url, policy, sandboxConfirmed) == Verdict.WEBVIEW) url else home
+        // The muster origin only: a WEBVIEW verdict for a sign-in origin is never a tap target.
+        return if (policy.allowsInWebView(url) && decide(url, policy, sandboxConfirmed) == Verdict.WEBVIEW) url else home
     }
 }

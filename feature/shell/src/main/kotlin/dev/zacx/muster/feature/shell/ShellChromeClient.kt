@@ -12,7 +12,9 @@ import android.webkit.WebView
  * `confirm` dialogs, which a WebView without one leaves dead or cancels.
  *
  * - **Files:** `<input type=file>` opens the system picker (the activity, by
- *   ActivityResult). Only `content://` URIs come back to the page: never a
+ *   ActivityResult) only while the WebView is on the muster origin; any other
+ *   page (a tenant's sign-in origin included) is answered "cancelled" with no
+ *   picker shown. Only `content://` URIs come back to the page: never a
  *   `file://` path, and the WebView keeps `allowFileAccess = false`.
  * - **Dialogs:** `alert` and `confirm` from the muster origin are shown as
  *   native dialogs. A dialog from any other origin is cancelled unshown.
@@ -40,6 +42,12 @@ class ShellChromeClient(private val policy: OriginPolicy, private val cb: ShellW
         filePathCallback: ValueCallback<Array<Uri>>,
         fileChooserParams: FileChooserParams,
     ): Boolean {
+        // muster's own page only: a sign-in origin (or anything else) gets no picker.
+        val at = webView.url
+        if (at == null || !policy.allowsInWebView(at)) {
+            filePathCallback.onReceiveValue(null)
+            return true
+        }
         val types = fileChooserParams.acceptTypes.orEmpty().flatMap { it.split(',') }.map { it.trim() }.filter { it.isNotEmpty() }
         val multiple = fileChooserParams.mode == FileChooserParams.MODE_OPEN_MULTIPLE
         cb.chooseFiles(types, multiple) { picked ->

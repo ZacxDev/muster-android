@@ -184,4 +184,48 @@ class DeviceApiTest {
         assertFalse(CredentialShape.ok("mdv_" + "B".repeat(42) + "="))
         assertFalse(CredentialShape.codeOk("mdp_" + "A".repeat(42) + "\n"))
     }
+
+    // --- the shell's sign-in origins ------------------------------------------------
+
+    /** Read before the first sign-in, so before pairing: no credential is sent, and none exists yet. */
+    @Test
+    fun webOriginsAreReadWithoutACredential() {
+        server.enqueue(json(200, """{"sso_origins":["https://auth.example.test","https://idp.example.test"],"other":1}"""))
+        assertEquals(
+            DeviceApi.WebOrigins.Advertised(listOf("https://auth.example.test", "https://idp.example.test")),
+            api.webOrigins(),
+        )
+        val req = server.takeRequest()
+        assertEquals("GET", req.method)
+        assertEquals("/api/device/web", req.url.encodedPath)
+        assertNull(req.headers["Authorization"])
+        assertNull(req.headers["Cookie"])
+    }
+
+    @Test
+    fun aMusterWithoutTheRouteAdvertisesNone() {
+        server.enqueue(json(404, """{"error":"not found"}"""))
+        assertEquals(DeviceApi.WebOrigins.NotOffered, api.webOrigins())
+        server.enqueue(json(200, """{}"""))
+        assertEquals(DeviceApi.WebOrigins.Advertised(emptyList()), api.webOrigins())
+    }
+
+    /** A gate's redirect, a 5xx or a wrong shape is not an answer: the caller keeps what it stored. */
+    @Test
+    fun anythingElseIsAFailureNotAnEmptyList() {
+        server.enqueue(MockResponse.Builder().code(302).addHeader("Location", "https://auth.example.test/login").build())
+        assertTrue(api.webOrigins() is DeviceApi.WebOrigins.Failed)
+        server.enqueue(json(503, """{"error":"down"}"""))
+        assertTrue(api.webOrigins() is DeviceApi.WebOrigins.Failed)
+        server.enqueue(json(200, """{"sso_origins":"https://auth.example.test"}"""))
+        assertTrue(api.webOrigins() is DeviceApi.WebOrigins.Failed)
+        assertEquals("the redirect was not followed", 3, server.requestCount)
+    }
+
+    @Test
+    fun aLongListIsCut() {
+        val many = (1..40).joinToString(",") { "\"https://i$it.example.test\"" }
+        server.enqueue(json(200, """{"sso_origins":[$many]}"""))
+        assertEquals(16, (api.webOrigins() as DeviceApi.WebOrigins.Advertised).ssoOrigins.size)
+    }
 }
