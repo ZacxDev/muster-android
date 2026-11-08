@@ -33,8 +33,31 @@ object WebAuthn {
         settings: WebSettings,
         supported: Boolean = WebViewFeature.isFeatureSupported(WebViewFeature.WEB_AUTHENTICATION),
         set: (WebSettings, Int) -> Unit = WebSettingsCompat::setWebAuthenticationSupport,
+    ) = forPage(settings, musterOrigin = true, supported, set)
+
+    /**
+     * WebAuthn for the main-frame document that is starting: as this app when
+     * it is on the muster origin ([musterOrigin]), OFF for any other (a
+     * tenant's sign-in origin), so a sign-in page can never run a ceremony
+     * through the app.
+     *
+     * 🔴 Limit: the WebView has no per-origin WebAuthn switch, only this
+     * WebView-wide setting, so the shell flips it as each main-frame document
+     * starts ([ShellWebView]'s client). It follows the main frame: a frame of
+     * another origin inside a muster page sees the muster page's setting
+     * (muster embeds none). Where the WebView lacks the feature nothing is
+     * set, and no page has WebAuthn anyway.
+     */
+    fun forPage(
+        settings: WebSettings,
+        musterOrigin: Boolean,
+        supported: Boolean = WebViewFeature.isFeatureSupported(WebViewFeature.WEB_AUTHENTICATION),
+        set: (WebSettings, Int) -> Unit = WebSettingsCompat::setWebAuthenticationSupport,
     ) {
         if (!supported) return
-        set(settings, WebSettingsCompat.WEB_AUTHENTICATION_SUPPORT_FOR_APP)
+        set(
+            settings,
+            if (musterOrigin) WebSettingsCompat.WEB_AUTHENTICATION_SUPPORT_FOR_APP else WebSettingsCompat.WEB_AUTHENTICATION_SUPPORT_NONE,
+        )
     }
 }

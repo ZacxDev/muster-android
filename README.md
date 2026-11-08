@@ -208,6 +208,70 @@ phase 3. Nothing on the server changes.
   upgrade (they carry no server, so they are refused and send nothing):
   dismiss those notifications; new ones work.
 
+### A server behind a sign-in gate
+
+A muster can sit behind a sign-in gate at its edge: an SSO proxy that sends a
+browser to an identity provider before muster's own page. Until now the
+gate's redirect left the muster origin, so it opened in a Custom Tab: the
+gate's cookie landed in the browser and the shell never reached muster.
+
+- **The server says which origins its sign-in passes through:**
+  `GET /api/device/web` answers `{"sso_origins": ["https://…", …]}`. It takes
+  no credential (it is read before the first sign-in, so before pairing), so
+  the edge must leave `/api/device/` ungated, which the device tier needs
+  anyway. The user never types the list.
+- **When:** Add server reads it before the new server's first page (5 s at
+  most), and a shell the user opens re-reads it in the background; a change
+  rebuilds that server's shell. The rebuilt shell does not read again, and a
+  change rebuilds a server's shell at most once a minute (a later change
+  applies to the next shell), so a server whose answer flips cannot loop the
+  page. 🔴 Only a `200` replaces the stored list: a `404` (a muster without
+  the route), any other status, a redirect or a network failure keeps what is
+  stored, so a new server has none until a `200` names some, and a blip never
+  drops a working sign-in.
+- **What they get: a load, nothing else.** Those origins load in that
+  server's WebView, in its own profile, so the gate's and the provider's
+  cookies stay with that server. 🔴 The bridge, the document-start scripts,
+  the microphone, native dialogs, the file picker, passkeys and upload routes
+  stay on the muster origin exactly. Only bare `https` origins are kept (no
+  path, query or user info), never the muster origin itself, at most 8. Any
+  other origin still opens in a Custom Tab.
+- **Every main-frame load is checked, POSTs too.** A form POST does not pass
+  the WebView's link check, so the shell also stops any main-frame document
+  that starts on an origin it would not load. Frames inside a page (a
+  provider's captcha, say) are not judged as navigations; they load normally.
+- **🔴 Listing an identity provider moves EVERY link to it into the WebView.**
+  A listed origin is listed for the whole server, not for the sign-in step:
+  any link a muster page shows to that origin (a repository, a profile, a
+  chat) opens inside the shell, in the server's profile, not in a Custom Tab.
+  List only the providers the sign-in needs, ideally one; a provider whose
+  links appear all over the board (a code host, say) is a poor choice when
+  another one the gate accepts would do.
+- **Passkeys stay muster's.** WebAuthn is a WebView-wide setting, not a
+  per-origin one, so the shell switches it each time a main-frame document
+  starts: on for the muster origin, off for any other. A sign-in page
+  therefore has no `PublicKeyCredential` and cannot run a ceremony through
+  the app; use the provider's other sign-in methods. Limit: the switch is
+  made at document start, so it follows the main frame; a frame of another
+  origin inside a muster page would see the muster page's setting (muster
+  embeds none).
+- **The gate's cookie expires** (the proxy's cookie lifetime). muster's htmx
+  requests and its event stream then get the gate's redirect or 401 and
+  would stall silently. A document-start script (muster origin only, servers
+  with a sign-in list only) answers an htmx send error, an htmx 401 or a
+  closed event stream by fetching `/manifest.webmanifest` with
+  `redirect: "manual"`. muster serves that file without its own session, so
+  only the GATE can turn it into a redirect or a 401; then the page reloads
+  into sign-in, at most once per 30 s. A probe that fails on the network does
+  nothing. 🔴 The edge must keep `/manifest.webmanifest` gated, or the probe
+  never fires. A page landing on a sign-in origin deletes the home-page
+  picture (`ShellSnapshot`), as muster's own sign-in page does.
+- **🔴 Not every provider works in a WebView.** Some providers' OAuth policy
+  refuses sign-in from an embedded WebView (Google's answers
+  `disallowed_useragent`), and an emailed login link opens in the mail app's
+  browser, not the shell. Sign in with a provider that allows a WebView and
+  advertise that provider's origin.
+
 ### 🔴 Uploaded files
 
 muster serves uploaded bytes on its own origin, which is where the bridge

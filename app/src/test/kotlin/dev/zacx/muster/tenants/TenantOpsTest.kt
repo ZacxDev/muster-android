@@ -214,4 +214,102 @@ class TenantOpsTest {
         assertTrue(ops.add("https://a.example.test") is TenantRepository.AddResult.Added)
         assertEquals(TenantRepository.AddResult.NeedsWebViewProfiles, ops.add("https://b.example.test"))
     }
+
+    // --- sign-in origins -----------------------------------------------------------------
+
+    private fun webServer(vararg answers: MockResponse): String {
+        val s = MockWebServer()
+        answers.forEach { s.enqueue(it) }
+        s.start()
+        servers += s
+        return s.url("/").toString().trimEnd('/')
+    }
+
+    private fun opsFor(origin: String, stored: List<String> = emptyList()): Pair<TenantOps, TenantRepository> {
+        val t = TenantRecord("t9", "x", 1, "tenant-t9", DeviceRecord(origin = origin), ssoOrigins = stored)
+        file = MemTenantsFile(Tenants(current = "t9", all = listOf(t), migrated = true))
+        val repo = TenantRepository(file, { DeviceRecord() }, {})
+        val ops = TenantOps(
+            repo, TenantSessions(profiles), { true }, ::DeviceApi, {}, unregisterPush = {}, dropNotifications = {},
+            local = ShellLocalState(ShellSnapshot(dir), { wm }),
+        )
+        return ops to repo
+    }
+
+    private fun json(code: Int, body: String) =
+        MockResponse.Builder().code(code).addHeader("Content-Type", "application/json").body(body).build()
+
+    @Test
+    fun advertisedSignInOriginsAreStoredNormalisedAndFiltered() = runBlocking {
+        val origin = webServer(
+            json(200, """{"sso_origins":["https://Auth.Example.test/","http://plain.example.test","https://p.example.test/login","https://idp.example.test","https://auth.example.test"]}"""),
+        )
+        val (ops, repo) = opsFor(origin)
+        assertTrue(ops.refreshSsoOrigins("t9"))
+        assertEquals(listOf("https://auth.example.test", "https://idp.example.test"), repo.read().byId("t9")!!.ssoOrigins)
+    }
+
+    /** A blip never drops a working sign-in: a failed read keeps the stored list. */
+    @Test
+    fun aFailedReadKeepsWhatIsStored() = runBlocking {
+        val stored = listOf("https://auth.example.test")
+        val origin = webServer(json(503, "{}"), MockResponse.Builder().code(302).addHeader("Location", "https://auth.example.test/").build())
+        val (ops, repo) = opsFor(origin, stored)
+        assertFalse(ops.refreshSsoOrigins("t9"))
+        assertFalse(ops.refreshSsoOrigins("t9"))
+        assertEquals(stored, repo.read().byId("t9")!!.ssoOrigins)
+    }
+
+    /** Only a 200 replaces the list: a 404 (a muster without the route, or a misrouted edge) keeps a working one. */
+    @Test
+    fun a404KeepsTheListAndOnlyA200ClearsIt() = runBlocking {
+        val stored = listOf("https://auth.example.test")
+        val origin = webServer(json(404, "{}"), json(200, """{"sso_origins":[]}"""))
+        val (ops, repo) = opsFor(origin, stored)
+        assertFalse(ops.refreshSsoOrigins("t9"))
+        assertEquals(stored, repo.read().byId("t9")!!.ssoOrigins)
+        assertTrue("a 200 that names none does clear it", ops.refreshSsoOrigins("t9"))
+        assertEquals(emptyList<String>(), repo.read().byId("t9")!!.ssoOrigins)
+    }
+
+    /**
+     * A server whose answer flips on every read (here: two lists, alternating)
+     * does not loop the shell: the rebuild a change causes does not read again,
+     * and a later change inside the gap is stored but rebuilds nothing.
+     * The driver is MainActivity's wiring: every rebuild opens a shell with
+     * byRefresh = true.
+     */
+    @Test
+    fun alternatingAnswersDoNotLoopTheShell() = runBlocking {
+        val a = """{"sso_origins":["https://a.example.test"]}"""
+        val b = """{"sso_origins":["https://b.example.test"]}"""
+        val s = MockWebServer()
+        s.dispatcher = object : Dispatcher() {
+            var n = 0
+            override fun dispatch(request: RecordedRequest) = json(200, if (n++ % 2 == 0) a else b)
+        }
+        s.start()
+        servers += s
+        val (ops, repo) = opsFor(s.url("/").toString().trimEnd('/'), listOf("https://b.example.test"))
+        var clock = 0L
+        val gate = SsoOriginsRefresh({ ops.refreshSsoOrigins(it) }, now = { clock })
+        var rebuilds = 0
+        suspend fun open(byRefresh: Boolean) {
+            // Bounded: a loop would recurse until this cap trips the assertion below.
+            if (rebuilds > 10) return
+            if (gate.onShellOpened("t9", byRefresh)) { rebuilds++; open(byRefresh = true) }
+        }
+        open(byRefresh = false)
+        assertEquals("one change, one rebuild, and the rebuild does not read", 1, rebuilds)
+        assertEquals(1, s.requestCount)
+        assertEquals(listOf("https://a.example.test"), repo.read().byId("t9")!!.ssoOrigins)
+        clock += 59_000
+        open(byRefresh = false) // the user opens the shell again within the minute
+        assertEquals("a change inside the gap is stored but rebuilds nothing", 1, rebuilds)
+        assertEquals(listOf("https://b.example.test"), repo.read().byId("t9")!!.ssoOrigins)
+        clock += 2_000
+        open(byRefresh = false)
+        assertEquals("after the gap a change rebuilds once more", 2, rebuilds)
+        assertEquals(3, s.requestCount)
+    }
 }

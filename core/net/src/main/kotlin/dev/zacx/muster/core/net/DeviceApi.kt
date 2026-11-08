@@ -103,6 +103,48 @@ class DeviceApi(
         }
     }
 
+    // --- the web shell's sign-in origins ---------------------------------------
+
+    @Serializable
+    private data class WebInfo(@SerialName("sso_origins") val ssoOrigins: List<String> = emptyList())
+
+    sealed interface WebOrigins {
+        /** muster answered: these are the origins its sign-in passes through (possibly none). */
+        data class Advertised(val ssoOrigins: List<String>) : WebOrigins
+
+        /** 404: a muster that predates the route. The caller keeps what it stored (none, for a new server). */
+        data object NotOffered : WebOrigins
+
+        /** No usable answer (network, a 3xx, a 5xx, a body that is not the shape). Keep what is stored. */
+        data class Failed(val message: String) : WebOrigins
+    }
+
+    /**
+     * `GET /api/device/web`: the sign-in origins an SSO gate in front of this
+     * muster sends a browser through. It takes NO credential, because it is
+     * read before the first sign-in (and so before pairing): the WebView must
+     * know them before it loads muster's first page. The edge must therefore
+     * leave `/api/device/` ungated, which muster's device tier needs anyway.
+     * The answer is a list of strings only; [Advertised] carries them as
+     * sent, and the shell's OriginPolicy keeps only bare `https` origins.
+     */
+    fun webOrigins(): WebOrigins {
+        val call = Request.Builder().url(url("api/device/web")).get().build()
+        return try {
+            http.newCall(call).execute().use { r ->
+                when (r.code) {
+                    200 -> runCatching { json.decodeFromString(WebInfo.serializer(), r.body.string()) }.getOrNull()
+                        ?.let { WebOrigins.Advertised(it.ssoOrigins.take(MAX_ADVERTISED).map { o -> o.take(300) }) }
+                        ?: WebOrigins.Failed("muster's answer could not be read")
+                    404 -> WebOrigins.NotOffered
+                    else -> WebOrigins.Failed("muster answered ${r.code}")
+                }
+            }
+        } catch (e: IOException) {
+            WebOrigins.Failed("muster could not be reached")
+        }
+    }
+
     // --- the device tier --------------------------------------------------------
 
     @Serializable
@@ -257,6 +299,9 @@ class DeviceApi(
     companion object {
         /** muster's internal/api DeviceTokenRefusal, exactly. */
         const val DEVICE_TOKEN_REFUSAL = "this route takes a paired device credential (mdv_…)"
+
+        /** More advertised origins than this are not read (the shell keeps at most 8). */
+        private const val MAX_ADVERTISED = 16
 
         private val JSON = "application/json".toMediaType()
         private val ASK_TARGET = Regex("^[1-9][0-9]{0,18}$")

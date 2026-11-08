@@ -26,7 +26,8 @@ import kotlinx.coroutines.withContext
  * one server may delete another's picture: that costs one blank start, never
  * a wrong one.
  * - [onCommit]: a page of the shell committed. Landing on muster's sign-in
- *   page, or the home load landing anywhere but `/`, deletes the picture.
+ *   page or on one of the server's sign-in origins, or the home load landing
+ *   anywhere but `/`, deletes the picture.
  * - [syncRefresh]: the job is scheduled only while the phone is paired; an
  *   unpaired phone has nothing for it to read.
  */
@@ -57,9 +58,12 @@ class ShellLocalState(
         forget(cancelRefresh)
     }
 
-    /** A page of the shell committed at [url] on [origin]; [homeLoad]: it was the launcher's home load. */
-    suspend fun onCommit(url: String, origin: String, homeLoad: Boolean) {
-        if (SnapshotPolicy.dropsOnCommit(url, origin, homeLoad)) withContext(io) { runCatching { snapshot.delete() } }
+    /**
+     * A page of the shell committed at [url] on [origin], whose server
+     * advertises [ssoOrigins]; [homeLoad]: it was the launcher's home load.
+     */
+    suspend fun onCommit(url: String, origin: String, homeLoad: Boolean, ssoOrigins: List<String> = emptyList()) {
+        if (SnapshotPolicy.dropsOnCommit(url, origin, homeLoad, ssoOrigins)) withContext(io) { runCatching { snapshot.delete() } }
     }
 
     /** Schedules the job when [paired] (any server is); an unpaired phone schedules nothing (and opens no WorkManager). */

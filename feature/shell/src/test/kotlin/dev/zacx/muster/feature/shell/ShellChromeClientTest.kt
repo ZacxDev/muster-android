@@ -44,10 +44,14 @@ class ShellChromeClientTest {
     }
 
     private fun chrome(): WebChromeClient {
-        ShellWebView.configure(wv, OriginPolicy.forServer("https://m.example.test")!!, callbacks)
+        ShellWebView.configure(wv, OriginPolicy.forServer("https://m.example.test", listOf(SIGN_IN))!!, callbacks)
         val c = shadowOf(wv).webChromeClient
         assertTrue("the shell sets no WebChromeClient", c is ShellChromeClient)
         return c
+    }
+
+    private companion object {
+        const val SIGN_IN = "https://signin.example.test"
     }
 
     private class Params(private val types: Array<String>, private val m: Int) : WebChromeClient.FileChooserParams() {
@@ -64,7 +68,9 @@ class ShellChromeClientTest {
     fun aFileInputGetsContentUrisOnly() {
         picked = listOf(Uri.parse("content://media/1"), Uri.parse("file:///sdcard/secret"), Uri.parse("https://x.example.test/a"))
         var got: Array<Uri>? = arrayOf()
-        val handled = chrome().onShowFileChooser(
+        val c = chrome()
+        wv.loadUrl("https://m.example.test/tasks/1")
+        val handled = c.onShowFileChooser(
             wv, ValueCallback { got = it },
             Params(arrayOf("image/png,image/jpeg", ""), WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE),
         )
@@ -77,8 +83,33 @@ class ShellChromeClientTest {
     fun aCancelledPickerAnswersNull() {
         picked = null
         var got: Array<Uri>? = arrayOf()
-        chrome().onShowFileChooser(wv, ValueCallback { got = it }, Params(arrayOf(), WebChromeClient.FileChooserParams.MODE_OPEN))
+        val c = chrome()
+        wv.loadUrl("https://m.example.test/")
+        c.onShowFileChooser(wv, ValueCallback { got = it }, Params(arrayOf(), WebChromeClient.FileChooserParams.MODE_OPEN))
         assertNull(got)
+    }
+
+    /**
+     * A tenant's sign-in origin loads in the WebView but gets no file picker:
+     * the page is answered "cancelled" and the system picker never opens. So
+     * does a WebView with no page yet.
+     */
+    @Test
+    fun aSignInOriginGetsNoFilePicker() {
+        picked = listOf(Uri.parse("content://media/1"))
+        val c = chrome()
+        wv.loadUrl("$SIGN_IN/login")
+        val blank = WebView(ApplicationProvider.getApplicationContext()) // no page yet: url is null
+        for (view in listOf(wv, blank)) {
+            var got: Array<Uri>? = arrayOf()
+            assertTrue(c.onShowFileChooser(view, ValueCallback { got = it }, Params(arrayOf(), WebChromeClient.FileChooserParams.MODE_OPEN)))
+            assertNull("${view.url}", got)
+        }
+        assertTrue("the picker was never asked", asked.isEmpty())
+        // Control: the same call on muster's page does reach it.
+        wv.loadUrl("https://m.example.test/")
+        c.onShowFileChooser(wv, ValueCallback { }, Params(arrayOf(), WebChromeClient.FileChooserParams.MODE_OPEN))
+        assertEquals(1, asked.size)
     }
 
     /** confirm() from muster is shown natively; a "no" cancels the JS result. */

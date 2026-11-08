@@ -59,7 +59,7 @@ class WebAuthnTest {
                 override fun jsDialog(message: String, confirm: Boolean, done: (Boolean) -> Unit) = Unit
                 override fun onHistoryChanged() = Unit
             },
-            enableWebAuthn = { seen += it },
+            webAuthn = { s, on -> if (on) seen += s },
         )
         assertEquals(1, seen.size)
         assertSame(wv.settings, seen[0])

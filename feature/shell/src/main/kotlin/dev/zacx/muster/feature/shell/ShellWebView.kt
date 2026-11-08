@@ -19,7 +19,9 @@ import java.time.Instant
 /**
  * The hardened WebView (docs/design/android.md, "The shell"):
  *
- * - one origin; other https links go to a Custom Tab ([ShellNavigation]);
+ * - one origin; other https links go to a Custom Tab ([ShellNavigation]),
+ *   except the tenant's advertised sign-in origins, which load but get no
+ *   bridge, no script and no grant ([OriginPolicy]);
  * - no file or content access, no `addJavascriptInterface`;
  * - the bridge is `WebViewCompat.addWebMessageListener` named `musterApp`,
  *   restricted to the exact origin (never `*`), main frame only;
@@ -27,7 +29,12 @@ import java.time.Instant
  *   (as shipped, resting on muster's sandbox headers); with it closed they are
  *   refused at the top level and as subresources;
  * - a download is handed to the browser, URL only ([DownloadHandoff]);
- * - WebAuthn (passkeys) is on, as this app, where the WebView has it ([WebAuthn]);
+ * - WebAuthn (passkeys) is on, as this app, where the WebView has it, for
+ *   muster-origin documents only; any other main-frame document starts with
+ *   it off ([WebAuthn.forPage]);
+ * - every main-frame document that starts on an origin the shell would not
+ *   load is stopped (a form POST skips `shouldOverrideUrlLoading`); only
+ *   main-frame navigations are judged there, so a page's frames load normally;
  * - pull to refresh asks the page what is under the finger ([PullProbeScript],
  *   [ShellRefreshLayout]).
  */
@@ -94,7 +101,7 @@ object ShellWebView {
         webView: WebView,
         policy: OriginPolicy,
         callbacks: Callbacks,
-        enableWebAuthn: (android.webkit.WebSettings) -> Unit = { WebAuthn.enable(it) },
+        webAuthn: (android.webkit.WebSettings, Boolean) -> Unit = { s, on -> WebAuthn.forPage(s, on) },
     ) {
         webView.settings.apply {
             javaScriptEnabled = true // muster's UI is htmx
@@ -106,9 +113,10 @@ object ShellWebView {
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             setGeolocationEnabled(false)
         }
-        // Passkeys (sign-in and "Confirm it's you"), as this app ([WebAuthn]).
-        enableWebAuthn(webView.settings)
-        webView.webViewClient = Client(policy, callbacks)
+        // Passkeys (sign-in and "Confirm it's you"), as this app ([WebAuthn]);
+        // re-decided per main-frame document by the client.
+        webAuthn(webView.settings, true)
+        webView.webViewClient = Client(policy, callbacks, webAuthn)
         webView.webChromeClient = ShellChromeClient(policy, callbacks)
         webView.setDownloadListener(DownloadHandoff(callbacks::openExternally))
 
@@ -129,10 +137,22 @@ object ShellWebView {
         }
         // Without WEB_MESSAGE_LISTENER (a very old WebView) there is no bridge:
         // the page then shows no "Pair this phone" button, and nothing pairs.
+
+        // A tenant behind a sign-in gate: an expired gate cookie reloads the
+        // page into sign-in instead of silently stalling htmx and SSE. Muster
+        // origin only; a tenant with no sign-in origins gets nothing.
+        SsoSessionGuard.install(webView, policy)
     }
 
-    private class Client(private val policy: OriginPolicy, private val cb: Callbacks) : WebViewClient() {
+    private class Client(
+        private val policy: OriginPolicy,
+        private val cb: Callbacks,
+        private val webAuthn: (android.webkit.WebSettings, Boolean) -> Unit,
+    ) : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+            // Main frame only: a frame inside a page (a sign-in page's captcha)
+            // loads as the page's own content, never as a navigation of the shell.
+            if (!request.isForMainFrame) return false
             val url = request.url.toString()
             return when (ShellNavigation.decide(url, policy)) {
                 ShellNavigation.Verdict.WEBVIEW -> false
@@ -145,11 +165,22 @@ object ShellWebView {
         override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
             // Pull to refresh's gesture count restarts with the new document.
             ShellRefreshLayout.of(view)?.onPageStarted()
-            // loadUrl and history navigation do not pass shouldOverrideUrlLoading.
-            if (ShellNavigation.decide(url, policy) == ShellNavigation.Verdict.BLOCKED_ATTACHMENT) {
-                view.stopLoading()
-                cb.onBlockedAttachment()
-                return
+            // Passkeys for muster's own documents only, never another origin's
+            // (decided first, so even a document stopped below has none).
+            webAuthn(view.settings, policy.allowsInWebView(url))
+            // loadUrl, history navigation and a form POST do not pass
+            // shouldOverrideUrlLoading: every main-frame document is judged here.
+            when (ShellNavigation.decide(url, policy)) {
+                ShellNavigation.Verdict.WEBVIEW -> Unit
+                ShellNavigation.Verdict.BLOCKED_ATTACHMENT -> {
+                    view.stopLoading()
+                    cb.onBlockedAttachment()
+                    return
+                }
+                ShellNavigation.Verdict.CUSTOM_TAB, ShellNavigation.Verdict.REFUSED -> {
+                    view.stopLoading()
+                    return
+                }
             }
             cb.onPageEvent(view, PageEvent.STARTED, url)
         }

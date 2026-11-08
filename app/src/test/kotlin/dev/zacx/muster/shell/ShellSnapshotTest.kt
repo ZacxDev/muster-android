@@ -69,6 +69,24 @@ class SnapshotPolicyTest {
         assertFalse(SnapshotPolicy.dropsOnCommit("$o/", o, homeLoad = false))
     }
 
+    /**
+     * A server behind a sign-in gate: a later page (not the home load) that the
+     * gate sends to the identity provider means the gate's session ended, so the
+     * signed-in picture goes. The home-load rule cannot cover this one: it is not
+     * the home load.
+     */
+    @Test
+    fun aPageTheGateSendsToSignInDeletesThePicture() {
+        val idp = "https://idp.example.test"
+        val sso = listOf(idp)
+        assertTrue(SnapshotPolicy.dropsOnCommit("$idp/login?next=x", o, homeLoad = false, ssoOrigins = sso))
+        // Control: the same commit for a server with no sign-in list, and another origin, keep it.
+        assertFalse(SnapshotPolicy.dropsOnCommit("$idp/login?next=x", o, homeLoad = false))
+        assertFalse(SnapshotPolicy.dropsOnCommit("https://elsewhere.example.test/", o, homeLoad = false, ssoOrigins = sso))
+        // muster's own pages are judged as before.
+        assertFalse(SnapshotPolicy.dropsOnCommit("$o/tasks", o, homeLoad = false, ssoOrigins = sso))
+    }
+
     @Test
     fun metaRoundTripsAndAnythingElseReadsAsNone() {
         val m = ShellSnapshot.Meta(o, 2, 731)
