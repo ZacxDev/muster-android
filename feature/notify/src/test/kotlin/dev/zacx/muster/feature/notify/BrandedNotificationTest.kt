@@ -39,12 +39,8 @@ class BrandedNotificationTest {
     /** A logo whose size and colour are its fingerprint. */
     private val logoA: Bitmap = Bitmap.createBitmap(7, 5, Bitmap.Config.ARGB_8888).apply { eraseColor(Color.RED) }
 
-    private val hints = mutableListOf<Pair<String, String>>()
-
-    private fun branding(t: NotifyTenant, icon: () -> Bitmap?) = object : AndroidNotifier.NotifyBranding {
-        override fun largeIcon(): Bitmap? = icon()
-        override fun onIconEtag(etag: String) { hints += t.id to etag }
-    }
+    @Suppress("UNUSED_PARAMETER")
+    private fun branding(t: NotifyTenant, icon: () -> Bitmap?) = AndroidNotifier.NotifyBranding { icon() }
 
     private fun notifier(t: NotifyTenant, b: AndroidNotifier.NotifyBranding?) = AndroidNotifier(
         app, t, tap = { tag, _ -> PendingIntent.getActivity(app, tag.hashCode(), Intent("test.OPEN"), PendingIntent.FLAG_IMMUTABLE) },
@@ -106,15 +102,6 @@ class BrandedNotificationTest {
     fun aFailingLookupNeverLosesTheNotification() {
         notifier(teamA, branding(teamA) { error("disk gone") }).show(PayloadV2("review", "3", "task-3", "A", "b", null))
         assertNull(posted("ta:task-3").getLargeIcon())
-    }
-
-    /** A push's icon_etag is handed on (for the NEXT notification); one without says nothing. */
-    @Test
-    fun aPushsIconEtagIsPassedOn() {
-        val n = notifier(teamA, branding(teamA) { null })
-        n.show(PayloadV2("review", "4", "task-4", "A", "b", null, iconEtag = "e2"))
-        n.show(PayloadV2("review", "5", "task-5", "A", "b", null))
-        assertEquals(listOf("ta" to "e2"), hints)
     }
 
     /** A failed button's new notification (nothing showing any more) carries the logo too. */

@@ -89,8 +89,8 @@ class MusterApp : Application(), Configuration.Provider, StepUpHost {
     /**
      * Each tenant's display name and logo (muster `/api/instance`), cached in
      * noBackupFilesDir/brand/<tenant id>/. Read on the first start of a
-     * process, when a server is added, by the background job, and when a push
-     * names a new logo etag; never on the UI thread, never blocking it.
+     * process, when a server is added, and by the background job; never on
+     * the UI thread, never blocking it.
      */
     val branding: TenantBranding by lazy { TenantBranding(File(noBackupFilesDir, "brand"), ::InstanceApi) }
 
@@ -118,7 +118,7 @@ class MusterApp : Application(), Configuration.Provider, StepUpHost {
         this,
         t.notifyTenant(),
         action = { tag, i, title, path, a -> StepUpActivity.pendingIntent(this, t.id, tag, i, title, path, a) },
-        branding = branding.notifyBranding(t, scope),
+        branding = branding.notifyBranding(t),
         tap = { tag, path -> tapPendingIntent(this, t.id, tag, path) },
     )
 

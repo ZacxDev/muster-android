@@ -7,21 +7,10 @@ import dev.zacx.muster.core.auth.TenantRecord
 import dev.zacx.muster.core.net.InstanceApi
 import dev.zacx.muster.core.net.PngCheck
 import dev.zacx.muster.feature.notify.AndroidNotifier
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
 import java.io.File
 
-/**
- * Tenant [t]'s logo on ITS notifications ([TenantBranding.brandFor], so bound
- * to [t]'s id and origin), and a push's new logo etag handed to
- * [TenantBranding.onIconEtag] on [scope] (never on the push thread).
- */
-fun TenantBranding.notifyBranding(t: TenantRecord, scope: CoroutineScope) = object : AndroidNotifier.NotifyBranding {
-    override fun largeIcon() = BrandBitmaps.load(brandFor(t)?.icon)
-    override fun onIconEtag(etag: String) {
-        scope.launch { runCatching { this@notifyBranding.onIconEtag(t, etag) } }
-    }
-}
+/** Tenant [t]'s logo on ITS notifications ([TenantBranding.brandFor], so bound to [t]'s id and origin). */
+fun TenantBranding.notifyBranding(t: TenantRecord) = AndroidNotifier.NotifyBranding { BrandBitmaps.load(brandFor(t)?.icon) }
 
 /**
  * Decodes a tenant's cached icon for the switcher and the notification's

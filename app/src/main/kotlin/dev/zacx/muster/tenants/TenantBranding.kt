@@ -33,9 +33,8 @@ data class TenantBrand(val name: String?, val icon: File?)
  *   read lands, the switcher and notifications show the defaults.
  * - **Fresh as the server says**: a read is skipped while the last answer's
  *   `Cache-Control: max-age` holds ([DEFAULT_TTL_MS] without one), unless
- *   forced (a tenant just added, or a push naming a new icon etag); a stale
- *   read is conditional (`If-None-Match`), and the icon is downloaded only
- *   when the logo's etag changed, itself conditional on the icon's ETag.
+ *   forced (a tenant just added); the icon is downloaded only when the
+ *   logo's etag (or reference) changed.
  * - **Falls back**: a muster without the route (404) has no branding, and any
  *   branding stored for it is dropped; a network or server failure keeps what
  *   is stored; an icon refused (another origin, not a PNG, over 1 MiB) is no
@@ -52,13 +51,9 @@ class TenantBranding(
         /** The origin this branding was read from: the binding [brandFor] checks. */
         val origin: String,
         val name: String? = null,
-        /** `/api/instance`'s own ETag, for the next conditional read. */
-        @SerialName("instance_etag") val instanceEtag: String? = null,
-        /** The logo's reference and etag as `/api/instance` sent them. */
+        /** The logo's reference and etag as `/api/instance` sent them: the icon is downloaded again only when either changes. */
         @SerialName("logo_ref") val logoRef: String? = null,
         @SerialName("logo_etag") val logoEtag: String? = null,
-        /** The icon response's ETag, for a conditional icon read. */
-        @SerialName("icon_http_etag") val iconHttpEtag: String? = null,
         /** The icon's file name in the tenant's directory, or null for none. */
         @SerialName("icon_file") val iconFile: String? = null,
         /** Epoch ms until which no read is made (unless forced). */
@@ -70,7 +65,6 @@ class TenantBranding(
     private val metas = MutableStateFlow<Map<String, Meta>>(emptyMap())
     @Volatile private var loaded = false
     private val locks = HashMap<String, Mutex>()
-    private val lastHint = HashMap<String, Long>()
 
     /** Changes whenever any tenant's branding changes (for the UI to re-read [brandFor]). */
     internal val changes: StateFlow<Map<String, Meta>> by lazy { load(); metas.asStateFlow() }
@@ -110,51 +104,31 @@ class TenantBranding(
     }
 
     private fun refreshLocked(t: TenantRecord, dir: File, force: Boolean): Outcome {
-        // A record read from another origin is not this tenant's: start over, and never send its etags here.
+        // A record read from another origin is not this tenant's: start over, and never reuse its icon here.
         val old = metas.value[t.id]?.takeIf { it.origin == t.origin }
         if (!force && old != null && now() < old.freshUntil) return Outcome.FRESH
         val client = runCatching { api(t.origin) }.getOrNull() ?: return Outcome.FAILED
-        val oldIcon = old?.iconFile?.let { File(dir, it) }?.takeIf { it.isFile }
-        return when (val r = client.instance(ifNoneMatch = old?.instanceEtag?.takeIf { oldIcon != null || old.logoRef == null })) {
+        return when (val r = client.instance()) {
             is InstanceApi.InstanceResult.Failed -> Outcome.FAILED
             InstanceApi.InstanceResult.NotOffered -> {
                 // An older muster: no branding. Drop what is stored; look again after the default time.
-                val m = Meta(origin = t.origin, freshUntil = freshUntil(null))
-                save(t.id, dir, m)
+                save(t.id, dir, Meta(origin = t.origin, freshUntil = freshUntil(null)))
                 if (old != null && (old.name != null || old.iconFile != null)) Outcome.UPDATED else Outcome.NOT_OFFERED
-            }
-            is InstanceApi.InstanceResult.NotModified -> {
-                // Only a conditional read can be answered 304; without a stored record it is no answer.
-                if (old == null) return Outcome.FAILED
-                save(t.id, dir, old.copy(freshUntil = freshUntil(r.maxAgeSeconds)))
-                Outcome.UNCHANGED
             }
             is InstanceApi.InstanceResult.Info -> {
                 val logo = r.instance.logo
-                var m = Meta(
-                    origin = t.origin,
-                    name = r.instance.name,
-                    instanceEtag = r.httpEtag,
-                    logoRef = logo?.icon,
-                    logoEtag = logo?.etag,
-                    freshUntil = freshUntil(r.maxAgeSeconds),
-                )
-                m = when {
+                val m = Meta(t.origin, r.instance.name, logo?.icon, logo?.etag, freshUntil = freshUntil(r.maxAgeSeconds))
+                val oldIcon = old?.iconFile?.let { File(dir, it) }?.takeIf { it.isFile }
+                val next = when {
                     logo == null -> m
-                    old?.logoEtag == logo.etag && oldIcon != null && old.logoRef == logo.icon ->
-                        m.copy(iconFile = oldIcon.name, iconHttpEtag = old.iconHttpEtag)
-                    else -> when (val ir = client.icon(logo.icon, ifNoneMatch = old?.iconHttpEtag?.takeIf { oldIcon != null })) {
+                    // The same logo: keep the stored icon, download nothing.
+                    oldIcon != null && old.logoEtag == logo.etag && old.logoRef == logo.icon -> m.copy(iconFile = oldIcon.name)
+                    else -> when (val ir = client.icon(logo.icon)) {
                         is InstanceApi.IconResult.Fetched -> {
                             val name = iconName(logo.etag)
                             dir.mkdirs()
                             writeAtomically(File(dir, name), ir.bytes)
-                            m.copy(iconFile = name, iconHttpEtag = ir.httpEtag)
-                        }
-                        InstanceApi.IconResult.NotModified -> {
-                            // The same bytes under the new logo etag: keep the file, renamed to its new key.
-                            val name = iconName(logo.etag)
-                            if (oldIcon != null && oldIcon.name != name) oldIcon.renameTo(File(dir, name))
-                            if (File(dir, name).isFile) m.copy(iconFile = name, iconHttpEtag = old?.iconHttpEtag) else m
+                            m.copy(iconFile = name)
                         }
                         // Refused: the server's logo is not one the app shows; the default icon.
                         is InstanceApi.IconResult.Refused -> m
@@ -162,30 +136,10 @@ class TenantBranding(
                         is InstanceApi.IconResult.Failed -> m.copy(logoEtag = null, freshUntil = 0)
                     }
                 }
-                save(t.id, dir, m)
-                if (m.copy(freshUntil = 0, instanceEtag = null) == old?.copy(freshUntil = 0, instanceEtag = null)) Outcome.UNCHANGED else Outcome.UPDATED
+                save(t.id, dir, next)
+                if (next.copy(freshUntil = 0) == old?.copy(freshUntil = 0)) Outcome.UNCHANGED else Outcome.UPDATED
             }
         }
-    }
-
-    /**
-     * A push named the icon etag [etag] for tenant [t]: when it is not the one
-     * stored, re-read `/api/instance` now (forced), at most once a minute per
-     * tenant. The push's own icon URL is never fetched: `/api/instance` on the
-     * tenant's origin stays the only source. True when a read was made.
-     */
-    suspend fun onIconEtag(t: TenantRecord, etag: String): Boolean {
-        load()
-        val m = metas.value[t.id]?.takeIf { it.origin == t.origin }
-        if (m?.logoEtag == etag) return false
-        synchronized(lastHint) {
-            val last = lastHint[t.id]
-            val at = now()
-            if (last != null && at - last < MIN_HINT_GAP_MS) return false
-            lastHint[t.id] = at
-        }
-        refresh(t, force = true)
-        return true
     }
 
     /** Tenant [id] was removed: its branding goes, from disk and memory. */
@@ -244,9 +198,6 @@ class TenantBranding(
 
         /** A server's max-age is honoured up to a week. */
         const val MAX_TTL_MS = 7 * 24 * 60 * 60 * 1000L
-
-        /** A push's new icon etag forces a read at most once a minute per tenant. */
-        const val MIN_HINT_GAP_MS = 60_000L
 
         private val json = Json { ignoreUnknownKeys = true }
 

@@ -15,7 +15,6 @@ import dev.zacx.muster.core.auth.Tenants
 import dev.zacx.muster.core.model.PayloadV2
 import dev.zacx.muster.core.net.InstanceApi
 import dev.zacx.muster.feature.notify.AndroidNotifier
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
@@ -52,7 +51,6 @@ class BrandingNotificationSeamTest {
     private val b = BrandServer()
     private val c = BrandServer()
     private lateinit var branding: TenantBranding
-    private val scope = CoroutineScope(Dispatchers.Unconfined)
 
     private fun tenant(id: String, s: BrandServer) =
         TenantRecord(id, Tenants.labelFor(s.origin), Tenants.PALETTE[1], "tenant-$id", DeviceRecord(origin = s.origin))
@@ -80,7 +78,7 @@ class BrandingNotificationSeamTest {
         a.server.close(); b.server.close(); c.server.close()
     }
 
-    private fun notifier(t: TenantRecord) = AndroidNotifier(app, t.notifyTenant(), branding = branding.notifyBranding(t, scope)) { tag, _ ->
+    private fun notifier(t: TenantRecord) = AndroidNotifier(app, t.notifyTenant(), branding = branding.notifyBranding(t)) { tag, _ ->
         PendingIntent.getActivity(app, tag.hashCode(), Intent("test.OPEN"), PendingIntent.FLAG_IMMUTABLE)
     }
 
@@ -103,15 +101,4 @@ class BrandingNotificationSeamTest {
         assertNull(largeIconColour("tc:task-1"))
     }
 
-    /** A push's new icon etag reaches the cache through the notifier, and the NEXT notification carries the new logo. */
-    @Test
-    fun aPushsNewIconEtagUpdatesTheNextNotification() {
-        val ta = tenant("ta", a)
-        runBlocking { branding.refresh(ta) }
-        a.instance = { BrandServer.json(BrandServer.branded("Team A", "v2")) }
-        a.icon = { BrandServer.png(realPng(Color.GREEN)) }
-        notifier(ta).show(PayloadV2("review", "1", "task-1", "A", "one", null, iconEtag = "v2"))
-        notifier(ta).show(PayloadV2("review", "2", "task-2", "A", "two", null))
-        assertEquals(Color.GREEN, largeIconColour("ta:task-2"))
-    }
 }

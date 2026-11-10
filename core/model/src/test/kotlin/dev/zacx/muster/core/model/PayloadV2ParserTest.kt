@@ -109,18 +109,4 @@ class PayloadV2ParserTest {
         assertTrue(Character.isHighSurrogate(p.payload.title[p.payload.title.length - 3]))
     }
 
-    /**
-     * Branding (additive): `icon_etag` is read as a short string; absent, empty,
-     * overlong or of the wrong type it is null, and the push still shows.
-     */
-    @Test
-    fun theIconEtagIsAdditive() {
-        fun etag(extra: String) = (parse("""{"v":2,"type":"review","title":"x"$extra}""") as Push.Show).payload.iconEtag
-        assertEquals("abc123", etag(""","icon":"https://muster.example.com/brand/icon-192.png","icon_etag":"abc123""""))
-        assertEquals(null, etag(""))
-        assertEquals(null, etag(""","icon_etag":"""""))
-        assertEquals(null, etag(""","icon_etag":7"""))
-        assertEquals(null, etag(""","icon_etag":"${"e".repeat(201)}""""))
-        assertEquals(null, etag(""","icon":42"""))
-    }
 }

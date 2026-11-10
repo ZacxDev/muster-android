@@ -224,14 +224,11 @@ app shows them so servers are told apart at a glance.
 - **When:** read when a server is added, once per app start, and by the
   background job, each in the background; nothing waits for it. A read is
   skipped while the last answer's `Cache-Control: max-age` holds (an hour
-  without one, a week at most); a stale read is conditional
-  (`If-None-Match`). The icon (`icon192`, else `url`; `icon512` is not used)
-  is downloaded only when the logo's `etag` changed, conditionally on the
-  icon's own ETag, and kept per server in `noBackupFilesDir/brand/<server>/`,
-  named by that etag. A push carrying `icon_etag` that differs from the
-  stored one re-reads `/api/instance` (at most once a minute per server), so
-  the NEXT notification has the new logo; the push's own `icon` URL is never
-  fetched.
+  without one, a week at most). The icon (`icon192`, else `url`; `icon512`
+  is not used) is downloaded only when the logo's `etag` changed, and kept
+  per server in `noBackupFilesDir/brand/<server>/`, named by that etag. A
+  push's `icon` and `icon_etag` are not read: a new logo shows after the next
+  read (app start, server add, or the background job).
 - **🔴 Fallbacks:** a muster without the route (`404`) has no branding, and
   any stored for it is dropped; a network failure or another status keeps
   what is stored; a `null` logo, an icon that is refused (below), or no

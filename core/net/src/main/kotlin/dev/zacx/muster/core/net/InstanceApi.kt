@@ -44,11 +44,8 @@ class InstanceApi(
     data class Logo(val icon: String, val etag: String)
 
     sealed interface InstanceResult {
-        /** 200. [httpEtag]: the response's own ETag (for the next If-None-Match); [maxAgeSeconds]: from Cache-Control. */
-        data class Info(val instance: Instance, val httpEtag: String?, val maxAgeSeconds: Long?) : InstanceResult
-
-        /** 304 to an If-None-Match: what is stored is current. */
-        data class NotModified(val maxAgeSeconds: Long?) : InstanceResult
+        /** 200. [maxAgeSeconds]: how long the answer holds, from Cache-Control. */
+        data class Info(val instance: Instance, val maxAgeSeconds: Long?) : InstanceResult
 
         /** 404: a muster older than the route. No branding; nothing is an error. */
         data object NotOffered : InstanceResult
@@ -57,21 +54,18 @@ class InstanceApi(
         data class Failed(val message: String) : InstanceResult
     }
 
-    /** `GET /api/instance`, conditional on [ifNoneMatch] when given. */
-    fun instance(ifNoneMatch: String? = null): InstanceResult {
-        val b = Request.Builder().url(url("api/instance")).get()
-        ifNoneMatch?.let { b.header("If-None-Match", it) }
+    /** `GET /api/instance`. */
+    fun instance(): InstanceResult {
+        val call = Request.Builder().url(url("api/instance")).get().build()
         return try {
-            http.newCall(b.build()).execute().use { r ->
-                val maxAge = CacheControl.maxAgeSeconds(r.header("Cache-Control"))
+            http.newCall(call).execute().use { r ->
                 when (r.code) {
                     200 -> {
                         val text = readBounded(r, MAX_INSTANCE_BYTES)?.decodeToString()
                             ?: return InstanceResult.Failed("muster's answer is too large")
                         val inst = InstanceParser.parse(text) ?: return InstanceResult.Failed("muster's answer could not be read")
-                        InstanceResult.Info(inst, r.header("ETag")?.take(MAX_ETAG), maxAge)
+                        InstanceResult.Info(inst, CacheControl.maxAgeSeconds(r.header("Cache-Control")))
                     }
-                    304 -> InstanceResult.NotModified(maxAge)
                     404 -> InstanceResult.NotOffered
                     else -> InstanceResult.Failed("muster answered ${r.code}")
                 }
@@ -82,11 +76,8 @@ class InstanceApi(
     }
 
     sealed interface IconResult {
-        /** A validated PNG; [httpEtag] is the response's ETag, for the next If-None-Match. */
-        class Fetched(val bytes: ByteArray, val httpEtag: String?) : IconResult
-
-        /** 304 to an If-None-Match: the stored bytes are current. */
-        data object NotModified : IconResult
+        /** A validated PNG. */
+        class Fetched(val bytes: ByteArray) : IconResult
 
         /** Not fetched, or fetched and not accepted: another origin, not a PNG, too large. Never retried as-is. */
         data class Refused(val reason: String) : IconResult
@@ -95,13 +86,11 @@ class InstanceApi(
         data class Failed(val message: String) : IconResult
     }
 
-    /** Fetches the icon [ref] (a path, or a URL on this origin), conditional on [ifNoneMatch] when given. */
-    fun icon(ref: String, ifNoneMatch: String? = null): IconResult {
+    /** Fetches the icon [ref] (a path, or a URL on this origin). */
+    fun icon(ref: String): IconResult {
         val target = BrandUrl.resolve(base, ref) ?: return IconResult.Refused("not on this server's origin")
-        val b = Request.Builder().url(target).get()
-        ifNoneMatch?.let { b.header("If-None-Match", it) }
         return try {
-            http.newCall(b.build()).execute().use { r ->
+            http.newCall(Request.Builder().url(target).get().build()).execute().use { r ->
                 when (r.code) {
                     200 -> {
                         if (!isPng(r.header("Content-Type"))) return IconResult.Refused("not image/png")
@@ -109,9 +98,8 @@ class InstanceApi(
                         if (declared > MAX_ICON_BYTES) return IconResult.Refused("larger than $MAX_ICON_BYTES bytes")
                         val bytes = readBounded(r, MAX_ICON_BYTES) ?: return IconResult.Refused("larger than $MAX_ICON_BYTES bytes")
                         if (PngCheck.dimensions(bytes) == null) return IconResult.Refused("not a PNG of an accepted size")
-                        IconResult.Fetched(bytes, r.header("ETag")?.take(MAX_ETAG))
+                        IconResult.Fetched(bytes)
                     }
-                    304 -> IconResult.NotModified
                     else -> IconResult.Failed("muster answered ${r.code}")
                 }
             }
@@ -128,8 +116,6 @@ class InstanceApi(
 
         /** The largest `/api/instance` body read. */
         const val MAX_INSTANCE_BYTES = 64L * 1024
-
-        private const val MAX_ETAG = 200
 
         internal fun isPng(contentType: String?): Boolean =
             contentType?.substringBefore(';')?.trim()?.equals("image/png", ignoreCase = true) == true

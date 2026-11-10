@@ -57,12 +57,12 @@ class InstanceApiTest {
             json(
                 200,
                 """{"name":"Team Muster","logo":{"url":"/brand/logo.png","icon192":"/brand/icon-192.png","icon512":"/brand/icon-512.png","etag":"abc123"}}""",
-                "ETag" to "\"i1\"", "Cache-Control" to "public, max-age=600",
+                "Cache-Control" to "public, max-age=600",
             ),
         )
         val r = api.instance()
         assertEquals(
-            InstanceApi.InstanceResult.Info(InstanceApi.Instance("Team Muster", InstanceApi.Logo("/brand/icon-192.png", "abc123")), "\"i1\"", 600),
+            InstanceApi.InstanceResult.Info(InstanceApi.Instance("Team Muster", InstanceApi.Logo("/brand/icon-192.png", "abc123")), 600),
             r,
         )
         val req = server.takeRequest()
@@ -71,25 +71,24 @@ class InstanceApiTest {
         // A public route: nothing identifying goes with it.
         assertNull(req.headers["Authorization"])
         assertNull(req.headers["Cookie"])
-        assertNull(req.headers["If-None-Match"])
     }
 
     @Test
     fun aNullLogoIsNoLogo() {
         server.enqueue(json(200, """{"name":"Team","logo":null}"""))
-        assertEquals(InstanceApi.InstanceResult.Info(InstanceApi.Instance("Team", null), null, null), api.instance())
+        assertEquals(InstanceApi.InstanceResult.Info(InstanceApi.Instance("Team", null), null), api.instance())
     }
 
     @Test
     fun missingFieldsAreAbsent() {
         server.enqueue(json(200, """{}"""))
-        assertEquals(InstanceApi.InstanceResult.Info(InstanceApi.Instance(null, null), null, null), api.instance())
+        assertEquals(InstanceApi.InstanceResult.Info(InstanceApi.Instance(null, null), null), api.instance())
     }
 
     @Test
     fun unknownFieldsAreIgnored() {
         server.enqueue(json(200, """{"name":"Team","theme":{"accent":"#fff"},"logo":{"icon192":"/i.png","etag":"e","future":1},"v":3}"""))
-        assertEquals(InstanceApi.InstanceResult.Info(InstanceApi.Instance("Team", InstanceApi.Logo("/i.png", "e")), null, null), api.instance())
+        assertEquals(InstanceApi.InstanceResult.Info(InstanceApi.Instance("Team", InstanceApi.Logo("/i.png", "e")), null), api.instance())
     }
 
     /** No icon192: the logo's url stands in; no etag, or no reference at all, is no logo (nothing to key a cache on). */
@@ -145,12 +144,6 @@ class InstanceApiTest {
         assertEquals(InstanceApi.InstanceResult.Failed("muster's answer is too large"), api.instance())
     }
 
-    @Test
-    fun aConditionalReadSendsTheEtagAndReads304() {
-        server.enqueue(MockResponse.Builder().code(304).addHeader("Cache-Control", "max-age=60").build())
-        assertEquals(InstanceApi.InstanceResult.NotModified(60), api.instance(ifNoneMatch = "\"i1\""))
-        assertEquals("\"i1\"", server.takeRequest().headers["If-None-Match"])
-    }
 
     @Test
     fun cacheControl() {
@@ -167,21 +160,12 @@ class InstanceApiTest {
     @Test
     fun anIconIsFetchedFromItsPath() {
         val bytes = pngBytes()
-        server.enqueue(png(bytes, "image/png", "ETag" to "\"p1\""))
+        server.enqueue(png(bytes))
         val r = api.icon("/brand/icon-192.png") as InstanceApi.IconResult.Fetched
         assertArrayEquals(bytes, r.bytes)
-        assertEquals("\"p1\"", r.httpEtag)
         val req = server.takeRequest()
         assertEquals("/brand/icon-192.png", req.url.encodedPath)
         assertNull(req.headers["Authorization"])
-    }
-
-    /** 🔴 The 304 path: the stored ETag is sent; nothing is downloaded again. */
-    @Test
-    fun aConditionalIconReadAnswers304() {
-        server.enqueue(MockResponse.Builder().code(304).build())
-        assertEquals(InstanceApi.IconResult.NotModified, api.icon("/brand/icon-192.png", ifNoneMatch = "\"p1\""))
-        assertEquals("\"p1\"", server.takeRequest().headers["If-None-Match"])
     }
 
     /** 🔴 An icon on another origin is never requested at all. */
