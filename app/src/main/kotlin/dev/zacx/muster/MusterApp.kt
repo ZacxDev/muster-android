@@ -36,6 +36,7 @@ import dev.zacx.muster.shell.ShellSnapshot
 import dev.zacx.muster.tenants.BrandBitmaps
 import dev.zacx.muster.tenants.TenantBranding
 import dev.zacx.muster.tenants.TenantOps
+import dev.zacx.muster.tenants.notifyBranding
 import dev.zacx.muster.tenants.notifyTenant
 import dev.zacx.muster.ui.ShownBrand
 import kotlinx.coroutines.CoroutineScope
@@ -112,20 +113,12 @@ class MusterApp : Application(), Configuration.Provider, StepUpHost {
             branding.brands(t).mapValues { (_, b) -> ShownBrand(b.name, BrandBitmaps.load(b.icon)?.asImageBitmap()) }
         }.flowOn(Dispatchers.IO)
 
-    /** Tenant [t]'s logo on its notifications, and a push's new logo etag passed to [branding]. */
-    private fun notifyBranding(t: TenantRecord) = object : AndroidNotifier.NotifyBranding {
-        override fun largeIcon() = BrandBitmaps.load(branding.brandFor(t)?.icon)
-        override fun onIconEtag(etag: String) {
-            scope.launch { runCatching { branding.onIconEtag(t, etag) } }
-        }
-    }
-
     /** Tenant [t]'s notifier: its label, colour and logo on every notification, its taps and buttons for it only. */
     fun notifierFor(t: TenantRecord) = AndroidNotifier(
         this,
         t.notifyTenant(),
         action = { tag, i, title, path, a -> StepUpActivity.pendingIntent(this, t.id, tag, i, title, path, a) },
-        branding = notifyBranding(t),
+        branding = branding.notifyBranding(t, scope),
         tap = { tag, path -> tapPendingIntent(this, t.id, tag, path) },
     )
 
