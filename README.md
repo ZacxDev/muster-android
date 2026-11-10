@@ -208,6 +208,47 @@ phase 3. Nothing on the server changes.
   upgrade (they carry no server, so they are refused and send nothing):
   dismiss those notifications; new ones work.
 
+### Each server's name and logo
+
+A muster can say what it is called and show its logo
+(`GET /api/instance`, public, no credential:
+`{"name": …, "logo": {"url", "icon192", "icon512", "etag"} | null}`). The
+app shows them so servers are told apart at a glance.
+
+- **Where:** the switcher bar shows the server's display name and logo in
+  place of its host and colour dot; the switcher's menu and server
+  management show each server's too. In the menu a server's host stays
+  under a name the server chose, so a name cannot pass for another server.
+  On notifications the logo is the **large icon**, on the lock screen too;
+  the small icon stays the app's, and the subtext stays the server's host.
+- **When:** read when a server is added, once per app start, and by the
+  background job, each in the background; nothing waits for it. A read is
+  skipped while the last answer's `Cache-Control: max-age` holds (an hour
+  without one, a week at most); a stale read is conditional
+  (`If-None-Match`). The icon (`icon192`, else `url`; `icon512` is not used)
+  is downloaded only when the logo's `etag` changed, conditionally on the
+  icon's own ETag, and kept per server in `noBackupFilesDir/brand/<server>/`,
+  named by that etag. A push carrying `icon_etag` that differs from the
+  stored one re-reads `/api/instance` (at most once a minute per server), so
+  the NEXT notification has the new logo; the push's own `icon` URL is never
+  fetched.
+- **🔴 Fallbacks:** a muster without the route (`404`) has no branding, and
+  any stored for it is dropped; a network failure or another status keeps
+  what is stored; a `null` logo, an icon that is refused (below), or no
+  stored icon yet, is the colour dot and no large icon.
+- **🔴 What is fetched:** from the server's own origin only. An icon
+  reference is a path resolved against the server's address, or a URL with
+  exactly its scheme, host and port; anything else (another host, `//host`,
+  another port or scheme, user info) is refused before any request.
+  Redirects are not followed; no cookie or credential is sent. An icon is
+  accepted only as `image/png`, at most 1 MiB (by `Content-Length` and by
+  counting the read), with a PNG signature and a declared size of at most
+  2048 px a side, and is decoded subsampled to at most 256 px. A display
+  name loses control and format characters and is cut to 64 characters.
+- **🔴 Per server:** a server's branding is stored under its own id and
+  bound to the origin it was read from; one server's logo or name is never
+  shown for another. Removing a server deletes its branding.
+
 ### A server behind a sign-in gate
 
 A muster can sit behind a sign-in gate at its edge: an SSO proxy that sends a
@@ -316,7 +357,7 @@ release has been published.
 |---|---|
 | `app` | the application: manifest, the launcher activity (server URL, shell, phone settings), the UnifiedPush service, wiring |
 | `core/model` | pure Kotlin: payload v2 and its parser, the action-id table, the action policy, the attachment gate |
-| `core/net` | pure Kotlin: the `/api/device/...` client (OkHttp, no redirects), the signed message and the challenge → action flow |
+| `core/net` | pure Kotlin: the `/api/device/...` client (OkHttp, no redirects), the signed message and the challenge → action flow, the `/api/instance` branding client (same origin only) |
 | `core/auth` | pairing, the step-up key and its policy, the sealed credential store, the muster servers (`Tenants`: one pairing each) |
 | `feature/shell` | the WebView: origin policy, navigation, bridge, insets, pull to refresh, one WebView profile per server |
 | `feature/push` | the push handler (decrypted-only), which server a push is for, the push-host check, registration |

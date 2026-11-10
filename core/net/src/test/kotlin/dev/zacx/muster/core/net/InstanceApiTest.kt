@@ -205,7 +205,8 @@ class InstanceApiTest {
         for (bad in listOf(
             "https://team.example.org/i.png", // another host
             "//team.example.org/i.png", // protocol-relative
-            "http://muster.example.com/i.png", // another scheme
+            "http://muster.example.com/i.png", // another scheme (and so another default port)
+            "http://muster.example.com:443/i.png", // another scheme on the SAME port: only the scheme check refuses it
             "https://muster.example.com:8443/i.png", // another port
             "https://muster.example.com.team.example.org/i.png", // a suffix trick
             "https://u:p@muster.example.com/i.png", // user info
@@ -244,6 +245,21 @@ class InstanceApiTest {
         // Exactly the cap is accepted.
         server.enqueue(png(pngBytes(size = max)))
         assertTrue(api.icon("/brand/icon-192.png") is InstanceApi.IconResult.Fetched)
+    }
+
+    /**
+     * A declared Content-Length over the cap is refused at once, before any
+     * body is read: the body here is short and never completes, so only the
+     * header check can answer Refused (reading it would end in a timeout).
+     */
+    @Test
+    fun anOversizedContentLengthIsRefusedBeforeReading() {
+        server.enqueue(
+            MockResponse.Builder().code(200).addHeader("Content-Type", "image/png")
+                .body(Buffer().write(pngBytes())).setHeader("Content-Length", (InstanceApi.MAX_ICON_BYTES + 1).toString()).build(),
+        )
+        val quick = InstanceApi(server.url("/").toString(), okhttp3.OkHttpClient.Builder().readTimeout(1, TimeUnit.SECONDS).build())
+        assertEquals(InstanceApi.IconResult.Refused("larger than ${InstanceApi.MAX_ICON_BYTES} bytes"), quick.icon("/brand/icon-192.png"))
     }
 
     /** A small file declaring a huge image is refused before anything decodes it. */
