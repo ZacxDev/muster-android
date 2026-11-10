@@ -5,6 +5,7 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.work.Configuration
 import androidx.work.WorkManager
 import dev.zacx.muster.core.auth.AesGcmAead
@@ -20,6 +21,7 @@ import dev.zacx.muster.core.auth.TenantRecord
 import dev.zacx.muster.core.auth.TenantRepository
 import dev.zacx.muster.core.model.AskOutcome
 import dev.zacx.muster.core.net.DeviceApi
+import dev.zacx.muster.core.net.InstanceApi
 import dev.zacx.muster.feature.notify.AndroidNotifier
 import dev.zacx.muster.feature.notify.Channels
 import dev.zacx.muster.feature.push.PushRegistrar
@@ -31,11 +33,17 @@ import dev.zacx.muster.feature.stepup.StepUpHost
 import dev.zacx.muster.push.MusterPushService
 import dev.zacx.muster.shell.ShellLocalState
 import dev.zacx.muster.shell.ShellSnapshot
+import dev.zacx.muster.tenants.BrandBitmaps
+import dev.zacx.muster.tenants.TenantBranding
 import dev.zacx.muster.tenants.TenantOps
 import dev.zacx.muster.tenants.notifyTenant
+import dev.zacx.muster.ui.ShownBrand
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -77,11 +85,47 @@ class MusterApp : Application(), Configuration.Provider, StepUpHost {
     val profiles by lazy { WebViewProfiles() }
     val sessions by lazy { TenantSessions(profiles) }
 
-    /** Tenant [t]'s notifier: its label and colour on every notification, its taps and buttons for it only. */
+    /**
+     * Each tenant's display name and logo (muster `/api/instance`), cached in
+     * noBackupFilesDir/brand/<tenant id>/. Read on the first start of a
+     * process, when a server is added, by the background job, and when a push
+     * names a new logo etag; never on the UI thread, never blocking it.
+     */
+    val branding: TenantBranding by lazy { TenantBranding(File(noBackupFilesDir, "brand"), ::InstanceApi) }
+
+    @Volatile private var brandingRead = false
+
+    /** Refreshes every tenant's branding once per process (each read honours the server's Cache-Control). */
+    fun refreshBrandingOnce() {
+        if (brandingRead) return
+        brandingRead = true
+        scope.launch { runCatching { branding.refreshAll(tenants.read()) } }
+    }
+
+    /**
+     * What the switcher shows for each tenant (by id): its server's display
+     * name and logo, decoded off the main thread with bounds. Re-emitted when
+     * the tenants or any branding change; a tenant with none is left out.
+     */
+    fun shownBrands(): Flow<Map<String, ShownBrand>> =
+        combine(tenants.tenants, branding.changes) { t, _ ->
+            branding.brands(t).mapValues { (_, b) -> ShownBrand(b.name, BrandBitmaps.load(b.icon)?.asImageBitmap()) }
+        }.flowOn(Dispatchers.IO)
+
+    /** Tenant [t]'s logo on its notifications, and a push's new logo etag passed to [branding]. */
+    private fun notifyBranding(t: TenantRecord) = object : AndroidNotifier.NotifyBranding {
+        override fun largeIcon() = BrandBitmaps.load(branding.brandFor(t)?.icon)
+        override fun onIconEtag(etag: String) {
+            scope.launch { runCatching { branding.onIconEtag(t, etag) } }
+        }
+    }
+
+    /** Tenant [t]'s notifier: its label, colour and logo on every notification, its taps and buttons for it only. */
     fun notifierFor(t: TenantRecord) = AndroidNotifier(
         this,
         t.notifyTenant(),
         action = { tag, i, title, path, a -> StepUpActivity.pendingIntent(this, t.id, tag, i, title, path, a) },
+        branding = notifyBranding(t),
         tap = { tag, path -> tapPendingIntent(this, t.id, tag, path) },
     )
 
@@ -117,7 +161,11 @@ class MusterApp : Application(), Configuration.Provider, StepUpHost {
         TenantOps(
             tenants, sessions, { profiles.multiProfile }, ::DeviceApi, { a -> keys.delete(a) },
             unregisterPush = { instance -> MusterPushService.unregister(this, instance) },
-            dropNotifications = { t -> notifierFor(t).cancelAll(); Channels.delete(this, t.notifyTenant()) },
+            dropNotifications = { t ->
+                notifierFor(t).cancelAll()
+                Channels.delete(this, t.notifyTenant())
+                scope.launch { runCatching { branding.forget(t.id) } }
+            },
             local = local,
         )
     }

@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
 import androidx.core.content.ContextCompat
@@ -48,14 +49,35 @@ import dev.zacx.muster.core.model.PayloadV2
  *   two servers never replace each other. The app builds [tap] and [action]
  *   for this tenant only, so a tap opens this server and a button signs for
  *   it, never for "the current one".
+ * - The tenant's logo ([branding], muster `/api/instance`) is the large icon,
+ *   on the lock-screen public version too, so two servers' notifications are
+ *   told apart at a glance; the small icon stays the app's. No cached logo
+ *   (an older server, none set, not fetched yet, refused) is no large icon.
+ *   A push naming a logo etag is passed on ([NotifyBranding.onIconEtag]) so
+ *   the app can fetch a new logo for the NEXT notification; this one never
+ *   waits for the network.
  */
 class AndroidNotifier(
     private val context: Context,
     val tenant: NotifyTenant,
     /** An ask button's PendingIntent; null draws no buttons. */
     private val action: ActionIntents? = null,
+    /** This tenant's logo; null shows none. */
+    private val branding: NotifyBranding? = null,
     private val tap: (tag: String, path: String?) -> PendingIntent,
 ) : NotificationSink {
+
+    /** A tenant's logo on its notifications, and a push's word that the logo changed. */
+    interface NotifyBranding {
+        /** The tenant's cached logo, decoded with bounds, or null. Local only: never the network. */
+        fun largeIcon(): Bitmap?
+
+        /** A push named [etag] as the server's current logo. */
+        fun onIconEtag(etag: String) {}
+    }
+
+    /** The large icon, or null; a failing lookup is no icon, never a lost notification. */
+    private fun largeIcon(): Bitmap? = runCatching { branding?.largeIcon() }.getOrNull()
 
     /** Builds the PendingIntent for button [index] of the notification under [tag]. */
     fun interface ActionIntents {
@@ -76,9 +98,11 @@ class AndroidNotifier(
         // quiets a notification that is still showing, and dropping it instead
         // would lose a question whose first push was lost.
         val silent = payload.update && active(tag) == null
+        payload.iconEtag?.let { e -> runCatching { branding?.onIconEtag(e) } }
         Channels.ensure(context, tenant)
         val channel = tenant.channel(Channels.forType(payload.type))
-        val b = base(channel, payload)
+        val icon = largeIcon()
+        val b = base(channel, payload, icon)
             .setSilent(silent)
             .setContentIntent(tap(tag, payload.path))
             .setAutoCancel(true)
@@ -94,7 +118,7 @@ class AndroidNotifier(
             }
         } else {
             b.setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-                .setPublicVersion(base(channel, payload).build())
+                .setPublicVersion(base(channel, payload, icon).build())
         }
         post(nm, tag, b.build())
     }
@@ -144,6 +168,7 @@ class AndroidNotifier(
             Channels.ensure(context, tenant)
             NotificationCompat.Builder(context, tenant.channel(Channels.ASKS))
                 .setSmallIcon(R.drawable.ic_stat_muster)
+                .setLargeIcon(largeIcon())
                 .setSubText(tenant.label)
                 .setColor(tenant.colour)
                 .setContentTitle(title)
@@ -196,8 +221,9 @@ class AndroidNotifier(
         nm.activeNotifications.filter { it.id == ID && it.tag?.startsWith(prefix) == true }.forEach { nm.cancel(it.tag, ID) }
     }
 
-    private fun base(channel: String, p: PayloadV2) = NotificationCompat.Builder(context, channel)
+    private fun base(channel: String, p: PayloadV2, largeIcon: Bitmap?) = NotificationCompat.Builder(context, channel)
         .setSmallIcon(R.drawable.ic_stat_muster)
+        .setLargeIcon(largeIcon)
         // Which server: on the notification and on its lock-screen public version.
         .setSubText(tenant.label)
         .setColor(tenant.colour)

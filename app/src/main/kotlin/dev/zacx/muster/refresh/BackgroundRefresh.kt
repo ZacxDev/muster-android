@@ -36,6 +36,9 @@ import java.util.concurrent.TimeUnit
  *    ([WebViewPrewarm]), so an open while the process is still cached is a
  *    warm start, not a cold one. Android decides how long a cached process
  *    lives; nothing here keeps it alive.
+ * 3. **Keep each server's branding current** (the worker, before 1 and 2):
+ *    its `/api/instance` name and logo, no read while the last answer's
+ *    Cache-Control holds (TenantBranding). Public routes, no credential.
  *
  * Both only while the phone is paired. Unpaired (or muster ended the
  * pairing on this run), there is nothing to read: the job cancels itself
@@ -102,6 +105,8 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     override suspend fun doWork(): Result {
         val app = MusterApp.from(applicationContext)
         app.local.pruneStale()
+        // Each server's name and logo, as fresh as its Cache-Control allows (no read while fresh).
+        runCatching { app.branding.refreshAll(app.tenants.read()) }
         val outcome = BackgroundRefresh(
             // Every paired server, each on its own; a revoked one drops its own push instance.
             refreshConfig = {

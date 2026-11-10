@@ -44,6 +44,14 @@ data class PayloadV2(
      * safe direction.
      */
     val update: Boolean = false,
+    /**
+     * `icon_etag`: the etag of the server's current logo (muster
+     * `/api/instance`), so the app notices a new logo without polling. Null
+     * when absent or not a short string; additive, so a wrong type is ignored
+     * rather than refusing the push. The payload's `icon` URL is not read:
+     * the logo is only ever fetched from `/api/instance` on the tenant's origin.
+     */
+    val iconEtag: String? = null,
 ) {
     companion object {
         /**
@@ -132,7 +140,8 @@ object PayloadV2Parser {
                 val body = cut(str(obj, "body").orEmpty(), PayloadV2.MAX_BODY)
                 if (title.isBlank()) return Push.Rejected("no title")
                 val ask = if (type == AskPush.TYPE) AskPushParser.parse(obj["ask"], obj["actions"]) else null
-                Push.Show(PayloadV2(type, id, tag, title, body, MusterPath.parse(str(obj, "url")), ask, update))
+                val iconEtag = str(obj, "icon_etag")?.takeIf { it.isNotEmpty() && it.length <= PayloadV2.MAX_ID }
+                Push.Show(PayloadV2(type, id, tag, title, body, MusterPath.parse(str(obj, "url")), ask, update, iconEtag))
             }
         }
     }

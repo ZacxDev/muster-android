@@ -182,6 +182,8 @@ class MainActivity : ComponentActivity() {
         // No WebView alive: a removed server's profile that was still in use can go now.
         if (webView == null) app.ops.retryProfileDeletes()
         tenants.all.forEach { Channels.ensure(this, it.notifyTenant()) }
+        // Each server's name and logo, in the background (never waited for).
+        app.refreshBrandingOnce()
         // The activity is exported (it is the launcher): the path is re-checked
         // (a muster path only, and tapTarget refuses upload routes whatever
         // AttachmentGate says), and a tap's tenant only selects which of this
@@ -214,10 +216,12 @@ class MainActivity : ComponentActivity() {
                     val p = OriginPolicy.forServer(url.trim()) ?: return@ServerUrlScreen getString(R.string.url_invalid)
                     lifecycleScope.launch {
                         when (val r = app.ops.add(p.allowedOriginRule)) {
-                            is TenantRepository.AddResult.Added -> { readSsoOrigins(r.tenant.id); route(Intent()) }
+                            is TenantRepository.AddResult.Added -> {
+                                refreshBranding(r.tenant); readSsoOrigins(r.tenant.id); route(Intent())
+                            }
                             // Already one of this phone's servers: switch to it.
                             is TenantRepository.AddResult.Duplicate -> {
-                                app.tenants.select(r.tenant.id); readSsoOrigins(r.tenant.id); route(Intent())
+                                app.tenants.select(r.tenant.id); refreshBranding(r.tenant); readSsoOrigins(r.tenant.id); route(Intent())
                             }
                             TenantRepository.AddResult.NeedsWebViewProfiles -> AlertDialog.Builder(this@MainActivity)
                                 .setTitle(R.string.webview_update_title).setMessage(R.string.webview_update)
@@ -239,6 +243,11 @@ class MainActivity : ComponentActivity() {
      */
     private suspend fun readSsoOrigins(id: String) {
         withTimeoutOrNull(SSO_READ_TIMEOUT_MS) { app.ops.refreshSsoOrigins(id) }
+    }
+
+    /** A server just added: its name and logo, read now in the background (the switcher shows its host until then). */
+    private fun refreshBranding(t: TenantRecord) {
+        app.scope.launch { runCatching { app.branding.refresh(t, force = true) } }
     }
 
     /** When a changed sign-in list rebuilds the shell: never from a rebuild, at most once a minute ([SsoOriginsRefresh]). */
@@ -286,8 +295,9 @@ class MainActivity : ComponentActivity() {
             setContent {
                 MaterialTheme {
                     val tenants by app.tenants.tenants.collectAsState(initial = null)
+                    val brands by remember { app.shownBrands() }.collectAsState(initial = emptyMap())
                     tenants?.let { all ->
-                        TenantBar(all, onSelect = ::switchTo, onManage = { showServers() }, onAdd = { showServerUrl(adding = true) })
+                        TenantBar(all, onSelect = ::switchTo, onManage = { showServers() }, onAdd = { showServerUrl(adding = true) }, brands = brands)
                     }
                 }
             }
@@ -624,6 +634,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 val tenants by app.tenants.tenants.collectAsState(initial = null)
+                val brands by remember { app.shownBrands() }.collectAsState(initial = emptyMap())
                 var open by remember { mutableStateOf(detail) }
                 val all = tenants ?: return@MaterialTheme
                 val t = all.byId(open)
@@ -649,6 +660,7 @@ class MainActivity : ComponentActivity() {
                         onRemove = ::removeServer,
                         onAdd = { showServerUrl(adding = true) },
                         onClose = if (all.all.isNotEmpty()) ({ lifecycleScope.launch { route(Intent()) } }) else null,
+                        brands = brands,
                     )
                 }
             }
