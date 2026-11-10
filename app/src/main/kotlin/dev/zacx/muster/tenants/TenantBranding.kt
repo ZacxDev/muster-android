@@ -107,9 +107,9 @@ class TenantBranding(
         // A record read from another origin is not this tenant's: start over, and never reuse its icon here.
         val old = metas.value[t.id]?.takeIf { it.origin == t.origin }
         if (!force && old != null && now() < old.freshUntil) return Outcome.FRESH
-        val client = runCatching { api(t.origin) }.getOrNull() ?: return Outcome.FAILED
+        val client = runCatching { api(t.origin) }.getOrNull() ?: return failed(t, dir, old)
         return when (val r = client.instance()) {
-            is InstanceApi.InstanceResult.Failed -> Outcome.FAILED
+            is InstanceApi.InstanceResult.Failed -> failed(t, dir, old)
             InstanceApi.InstanceResult.NotOffered -> {
                 // An older muster: no branding. Drop what is stored; look again after the default time.
                 save(t.id, dir, Meta(origin = t.origin, freshUntil = freshUntil(null)))
@@ -158,8 +158,20 @@ class TenantBranding(
 
     private fun lockFor(id: String): Mutex = synchronized(locks) { locks.getOrPut(id) { Mutex() } }
 
+    /**
+     * A read that failed (network, 5xx, timeout, an unreadable answer): what is
+     * stored stays, and no unforced read is made for [FAILURE_BACKOFF_MS], so
+     * a server that is down is not read again on every background run.
+     */
+    private fun failed(t: TenantRecord, dir: File, old: Meta?): Outcome {
+        val until = now() + FAILURE_BACKOFF_MS
+        save(t.id, dir, old?.copy(freshUntil = until) ?: Meta(origin = t.origin, freshUntil = until))
+        return Outcome.FAILED
+    }
+
     private fun freshUntil(maxAgeSeconds: Long?): Long {
-        val ttl = maxAgeSeconds?.let { (it * 1000).coerceIn(0, MAX_TTL_MS) } ?: DEFAULT_TTL_MS
+        // Clamped in seconds BEFORE the multiply: a huge max-age must not overflow.
+        val ttl = maxAgeSeconds?.let { it.coerceIn(0, MAX_TTL_MS / 1000) * 1000 } ?: DEFAULT_TTL_MS
         return now() + ttl
     }
 
@@ -198,6 +210,9 @@ class TenantBranding(
 
         /** A server's max-age is honoured up to a week. */
         const val MAX_TTL_MS = 7 * 24 * 60 * 60 * 1000L
+
+        /** After a failed read, no unforced read for an hour. */
+        const val FAILURE_BACKOFF_MS = 60 * 60 * 1000L
 
         private val json = Json { ignoreUnknownKeys = true }
 

@@ -215,10 +215,14 @@ A muster can say what it is called and show its logo
 `{"name": …, "logo": {"url", "icon192", "icon512", "etag"} | null}`). The
 app shows them so servers are told apart at a glance.
 
-- **Where:** the switcher bar shows the server's display name and logo in
-  place of its host and colour dot; the switcher's menu and server
-  management show each server's too. In the menu a server's host stays
-  under a name the server chose, so a name cannot pass for another server.
+- **Where:** the switcher bar shows the server's display name and logo,
+  and still the two things the server cannot choose: its host (beside a
+  display name) and its colour dot (picked by this app, beside the logo).
+  The switcher's menu shows each server's name and logo with its host under
+  the name; server management shows the name, logo and full address. Two
+  servers that publish the same name and logo therefore still differ in the
+  bar by host and colour. A server can make its name and logo look like
+  another's; it cannot change its host or its colour.
   On notifications the logo is the **large icon**, on the lock screen too;
   the small icon stays the app's, and the subtext stays the server's host.
 - **When:** read when a server is added, once per app start, and by the
@@ -231,8 +235,11 @@ app shows them so servers are told apart at a glance.
   read (app start, server add, or the background job).
 - **🔴 Fallbacks:** a muster without the route (`404`) has no branding, and
   any stored for it is dropped; a network failure or another status keeps
-  what is stored; a `null` logo, an icon that is refused (below), or no
-  stored icon yet, is the colour dot and no large icon.
+  what is stored, and that server is not read again (unforced) for an hour;
+  every branding call ends within 20 s; in the background job branding is
+  read last, after the pairing checks, so it never delays a revocation. A
+  `null` logo, an icon that is refused (below), or no stored icon yet, is
+  the colour dot and no large icon.
 - **🔴 What is fetched:** from the server's own origin only. An icon
   reference is a path resolved against the server's address, or a URL with
   exactly its scheme, host and port; anything else (another host, `//host`,

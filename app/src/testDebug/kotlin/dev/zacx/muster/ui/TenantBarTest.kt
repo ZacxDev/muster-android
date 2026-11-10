@@ -8,6 +8,7 @@ import androidx.compose.ui.test.longClick
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.onAllNodesWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -154,15 +155,50 @@ class TenantBarTest {
         }
     }
 
-    /** A branded server: its display name and logo replace its host and colour dot. */
+    /**
+     * A branded server: its display name and logo, and still its host and
+     * colour dot, which the server cannot choose.
+     */
     @Test
-    fun theBarShowsTheServersNameAndLogo() {
+    fun theBarShowsTheServersNameAndLogoBesideItsHostAndDot() {
         showBranded(current = "t2", mapOf("t2" to ShownBrand("Team Muster", logo)))
-        rule.onNodeWithText("Team Muster").assertIsDisplayed()
+        rule.onNodeWithText("Team Muster", useUnmergedTree = true).assertIsDisplayed()
         rule.onNodeWithTag(tagLogo("t2"), useUnmergedTree = true).assertIsDisplayed()
-        rule.onNodeWithTag(tagDot("t2"), useUnmergedTree = true).assertDoesNotExist()
-        rule.onNodeWithText("work.example.test").assertDoesNotExist()
-        rule.onNodeWithContentDescription("Server: Team Muster").assertIsDisplayed()
+        rule.onNodeWithTag(tagDot("t2"), useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText("work.example.test", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithContentDescription("Server: Team Muster (work.example.test)").assertIsDisplayed()
+    }
+
+    /**
+     * 🔴 Two servers publishing the SAME name and logo still render different
+     * bars: each keeps its own host and its own colour dot (the colour is this
+     * app's, chosen per server), so one cannot pass for the other.
+     */
+    @Test
+    fun identicalBrandsStillRenderDistinguishableBars() {
+        val same = ShownBrand("Team Muster", logo)
+        val brands = mapOf(Tenants.DEFAULT to same, "t2" to same)
+        val all = listOf(home, work)
+        rule.setContent {
+            MaterialTheme {
+                androidx.compose.foundation.layout.Column {
+                    TenantBar(Tenants(current = Tenants.DEFAULT, all = all, migrated = true), onSelect = {}, onManage = {}, onAdd = {}, brands = brands)
+                    TenantBar(Tenants(current = "t2", all = all, migrated = true), onSelect = {}, onManage = {}, onAdd = {}, brands = brands)
+                }
+            }
+        }
+        // The server's own text and picture are the same in both bars...
+        rule.onAllNodesWithText("Team Muster", useUnmergedTree = true).assertCountEquals(2)
+        // ...but each bar shows its own host,
+        rule.onNodeWithText("home.example.test", useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithText("work.example.test", useUnmergedTree = true).assertIsDisplayed()
+        // its own colour dot (two different colours),
+        rule.onNodeWithTag(tagDot(Tenants.DEFAULT), useUnmergedTree = true).assertIsDisplayed()
+        rule.onNodeWithTag(tagDot("t2"), useUnmergedTree = true).assertIsDisplayed()
+        org.junit.Assert.assertNotEquals(home.colour, work.colour)
+        // and a different spoken description.
+        rule.onNodeWithContentDescription("Server: Team Muster (home.example.test)").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Server: Team Muster (work.example.test)").assertIsDisplayed()
     }
 
     /** No branding (an older server, a 404, a network error, nothing cached yet): the host and the colour dot, as before. */

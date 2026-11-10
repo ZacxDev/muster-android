@@ -111,6 +111,29 @@ class InstanceApiTest {
         assertTrue(api.instance() is InstanceApi.InstanceResult.Failed)
     }
 
+    /** Format characters outside the BMP go too: the tag characters (U+E0001, U+E0020-U+E007F) are surrogate pairs. */
+    @Test
+    fun supplementaryFormatCharactersAreRemoved() {
+        val tags = String(Character.toChars(0xE0001)) + String(Character.toChars(0xE0041)) + String(Character.toChars(0xE007F))
+        assertEquals("TeamMuster", InstanceParser.cleanName("Team${tags}Muster"))
+        // An ordinary supplementary character (an emoji) is kept.
+        assertEquals("Team 😀", InstanceParser.cleanName("Team 😀"))
+    }
+
+    /** 🔴 The whole call is bounded: a server trickling its body (each byte inside the read timeout) cannot hold a refresh. */
+    @Test
+    fun theWholeCallIsBounded() {
+        server.enqueue(
+            MockResponse.Builder().code(200).addHeader("Content-Type", "image/png")
+                .body(Buffer().write(pngBytes(size = 64))).throttleBody(1, 100, TimeUnit.MILLISECONDS).build(),
+        )
+        val quick = InstanceApi(server.url("/").toString(), callTimeoutMs = 500)
+        val started = System.nanoTime()
+        assertEquals(InstanceApi.IconResult.Failed("muster could not be reached"), quick.icon("/brand/icon-192.png"))
+        assertTrue("ended by the call timeout", (System.nanoTime() - started) / 1_000_000 < 3_000)
+        assertEquals(20_000L, InstanceApi.CALL_TIMEOUT_MS)
+    }
+
     /** The name is shown in the app bar: no control or format characters, at most 64 code points, blank is none. */
     @Test
     fun theNameIsCleaned() {
@@ -195,6 +218,10 @@ class InstanceApiTest {
             "https://muster.example.com.team.example.org/i.png", // a suffix trick
             "https://u:p@muster.example.com/i.png", // user info
             "/\\team.example.org/i.png", // backslash
+            // Same-origin once OkHttp has resolved them, so ONLY the control/backslash guard refuses these:
+            "/brand\\icon-192.png", // a backslash OkHttp would turn into "/"
+            "/brand/icon-192.png\u0007", // a raw control character OkHttp would percent-encode
+            "/brand/\nicon-192.png",
             "javascript:alert(1)",
             "",
         )) {

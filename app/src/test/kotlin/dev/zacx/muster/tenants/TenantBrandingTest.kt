@@ -165,6 +165,57 @@ class TenantBrandingTest {
         assertNull(branding.brandFor(tb))
     }
 
+    /**
+     * 🔴 A failed read backs off: no unforced read for FAILURE_BACKOFF_MS, so a
+     * dead server is not read on every background run; what was stored stays
+     * through it, and a forced read (Add server) is never held back.
+     */
+    @Test
+    fun aFailedReadBacksOff() {
+        a.instance = { BrandServer.json(BrandServer.branded("Team", "e1")) }
+        a.icon = { BrandServer.png(fakePng(0xA)) }
+        refresh(ta)
+        a.instance = { MockResponse.Builder().code(503).build() }
+        a.seen.clear()
+        clock += TenantBranding.DEFAULT_TTL_MS + 1 // the answer itself is stale
+        assertEquals(TenantBranding.Outcome.FAILED, refresh(ta))
+        assertEquals(listOf("/api/instance"), a.paths())
+
+        a.seen.clear()
+        clock += TenantBranding.FAILURE_BACKOFF_MS - 1
+        assertEquals(TenantBranding.Outcome.FRESH, refresh(ta))
+        assertEquals("backed off: no request", emptyList<String>(), a.paths())
+        assertEquals("Team", branding.brandFor(ta)!!.name)
+        assertArrayEquals(fakePng(0xA), iconBytes(ta))
+
+        clock += 2
+        assertEquals(TenantBranding.Outcome.FAILED, refresh(ta))
+        assertEquals(listOf("/api/instance"), a.paths())
+        a.seen.clear()
+        assertEquals(TenantBranding.Outcome.FAILED, refresh(ta, force = true))
+        assertEquals("a forced read is not held back", listOf("/api/instance"), a.paths())
+
+        // A server that never answered backs off too, with nothing stored.
+        b.server.close()
+        assertEquals(TenantBranding.Outcome.FAILED, refresh(tb))
+        assertEquals(TenantBranding.Outcome.FRESH, refresh(tb))
+        assertNull(branding.brandFor(tb))
+    }
+
+    /** A huge max-age is capped at a week, never overflowed into "always stale". */
+    @Test
+    fun aHugeMaxAgeIsCappedNotOverflowed() {
+        a.instance = { BrandServer.json("""{"name":"Team"}""", "Cache-Control" to "max-age=${Long.MAX_VALUE}") }
+        refresh(ta)
+        a.seen.clear()
+        clock += TenantBranding.MAX_TTL_MS - 1
+        assertEquals(TenantBranding.Outcome.FRESH, refresh(ta))
+        assertEquals(emptyList<String>(), a.paths())
+        clock += 2
+        assertEquals(TenantBranding.Outcome.UNCHANGED, refresh(ta))
+        assertEquals(listOf("/api/instance"), a.paths())
+    }
+
     /** A 5xx is a failure too: what is stored stays. */
     @Test
     fun aServerErrorKeepsWhatIsStored() {

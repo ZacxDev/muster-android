@@ -29,9 +29,12 @@ import java.io.IOException
 class InstanceApi(
     origin: String,
     client: OkHttpClient = DeviceApi.defaultClient(),
+    /** The whole call's limit (connect, headers, body): a server that trickles bytes cannot hold a refresh. */
+    callTimeoutMs: Long = CALL_TIMEOUT_MS,
 ) {
     val base: HttpUrl = requireNotNull(origin.toHttpUrlOrNull()) { "not a URL" }
-    private val http = client.newBuilder().followRedirects(false).followSslRedirects(false).build()
+    private val http = client.newBuilder().followRedirects(false).followSslRedirects(false)
+        .callTimeout(callTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS).build()
 
     /** What `/api/instance` says. Both fields are optional: an older or unbranded muster sends nulls. */
     data class Instance(val name: String?, val logo: Logo?)
@@ -114,6 +117,9 @@ class InstanceApi(
         /** The largest icon accepted, in bytes (1 MiB). */
         const val MAX_ICON_BYTES = 1L shl 20
 
+        /** Every branding call ends within this, whatever the server does. */
+        const val CALL_TIMEOUT_MS = 20_000L
+
         /** The largest `/api/instance` body read. */
         const val MAX_INSTANCE_BYTES = 64L * 1024
 
@@ -166,9 +172,17 @@ object InstanceParser {
         return InstanceApi.Instance(name, logo)
     }
 
-    /** No control characters, trimmed, at most [MAX_NAME] code points; blank is no name. */
+    /**
+     * No control or format characters (by code point, so the supplementary
+     * tag characters U+E0000-U+E007F go too), trimmed, at most [MAX_NAME]
+     * code points; blank is no name.
+     */
     internal fun cleanName(raw: String): String? {
-        val s = raw.filterNot { it.isISOControl() || Character.getType(it) == Character.FORMAT.toInt() }.trim()
+        val kept = StringBuilder()
+        raw.codePoints().forEach { cp ->
+            if (!Character.isISOControl(cp) && Character.getType(cp) != Character.FORMAT.toInt()) kept.appendCodePoint(cp)
+        }
+        val s = kept.toString().trim()
         if (s.isEmpty()) return null
         if (s.codePointCount(0, s.length) <= MAX_NAME) return s
         return s.substring(0, s.offsetByCodePoints(0, MAX_NAME)).trimEnd()

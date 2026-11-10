@@ -63,6 +63,34 @@ class BackgroundRefreshTest {
         assertEquals(BackgroundRefresh.Outcome.NOT_PAIRED to listOf("config", "stop"), outcome { ConfigResult.NotPaired })
     }
 
+    /**
+     * 🔴 Branding is read LAST, after the config read and whatever it led to
+     * (a revocation included), whatever the outcome; a branding read that
+     * throws changes nothing.
+     */
+    @Test
+    fun brandingRunsLastAndNeverChangesTheOutcome() {
+        for ((answer, want) in listOf(
+            ConfigResult.NoPush to listOf("config", "prewarm", "branding"),
+            ConfigResult.Revoked to listOf("config", "revoked", "stop", "branding"),
+            ConfigResult.NotPaired to listOf("config", "stop", "branding"),
+        )) {
+            val log = mutableListOf<String>()
+            var o: BackgroundRefresh.Outcome? = null
+            runTest {
+                o = BackgroundRefresh(
+                    refreshConfig = { log += "config"; answer },
+                    onRevoked = { log += "revoked" },
+                    onNotPaired = { log += "stop" },
+                    prewarm = { log += "prewarm" },
+                    branding = { log += "branding"; throw java.io.IOException("a slow, dead server") },
+                ).run()
+            }
+            assertEquals(answer.toString(), want, log)
+            assertEquals(outcome { answer }.first, o)
+        }
+    }
+
     @Test
     fun aThrowingConfigReadStillWarmsChromium() {
         assertEquals(BackgroundRefresh.Outcome.CONFIG_FAILED to listOf("config", "prewarm"), outcome { throw java.io.IOException("offline") })

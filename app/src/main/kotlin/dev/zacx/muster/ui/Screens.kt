@@ -202,14 +202,17 @@ data class ShownBrand(val name: String?, val logo: ImageBitmap?)
 /** The name shown for [t]: its server's display name, else its label (the host). */
 fun displayName(t: TenantRecord, brand: ShownBrand?): String = brand?.name ?: t.label
 
-/** [t]'s logo when it has one, else its colour dot. */
+/**
+ * [t]'s logo when it has one, else its colour dot. [keepDot]: the colour dot
+ * stays beside the logo (the switcher bar), since the colour is the app's
+ * and the logo is the server's.
+ */
 @Composable
-private fun TenantMark(t: TenantRecord, brand: ShownBrand?, size: Dp = 20.dp) {
+private fun TenantMark(t: TenantRecord, brand: ShownBrand?, size: Dp = 20.dp, keepDot: Boolean = false) {
     val logo = brand?.logo
+    if (logo == null || keepDot) Box(Modifier.testTag(tagDot(t.id))) { ColourDot(t.colour) }
     if (logo != null) {
         Image(logo, contentDescription = null, modifier = Modifier.size(size).clip(RoundedCornerShape(4.dp)).testTag(tagLogo(t.id)))
-    } else {
-        Box(Modifier.testTag(tagDot(t.id))) { ColourDot(t.colour) }
     }
 }
 
@@ -220,9 +223,11 @@ private fun TenantMark(t: TenantRecord, brand: ShownBrand?, size: Dp = 20.dp) {
  * another server switches to it. A long press opens server management.
  * It renders from local state only: a slow server never blocks it.
  *
- * [brands] (by tenant id): a server's display name and logo replace its host
- * and colour dot. In the menu a server's host stays under its display name,
- * so a name a server chose cannot pass for another server.
+ * [brands] (by tenant id): a server's display name and logo are shown, but
+ * never instead of what the server cannot choose: in the bar the colour dot
+ * (assigned by this app) stays beside the logo and the host stays beside a
+ * display name; in the menu the host stays under it. Two servers publishing
+ * the same name and logo still look different.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -247,13 +252,16 @@ fun TenantBar(
                         onClick = { open = true },
                         onLongClick = onManage,
                     )
-                    .semantics { contentDescription = "Server: $activeName" }
+                    .semantics { contentDescription = "Server: $activeName" + if (activeName != active.label) " (${active.label})" else "" }
                     .padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                TenantMark(active, brands[active.id])
+                TenantMark(active, brands[active.id], keepDot = true)
                 Text(activeName, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (activeName != active.label) {
+                    Text(active.label, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 Text("▾", style = MaterialTheme.typography.titleSmall)
             }
             DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
