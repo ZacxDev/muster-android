@@ -208,6 +208,51 @@ phase 3. Nothing on the server changes.
   upgrade (they carry no server, so they are refused and send nothing):
   dismiss those notifications; new ones work.
 
+### Each server's name and logo
+
+A muster can say what it is called and show its logo
+(`GET /api/instance`, public, no credential:
+`{"name": …, "logo": {"url", "icon192", "icon512", "etag"} | null}`). The
+app shows them so servers are told apart at a glance.
+
+- **Where:** the switcher bar shows the server's display name and logo,
+  and still the two things the server cannot choose: its host (beside a
+  display name) and its colour dot (picked by this app, beside the logo).
+  The switcher's menu shows each server's name and logo with its host under
+  the name; server management shows the name, logo and full address. Two
+  servers that publish the same name and logo therefore still differ in the
+  bar by host and colour. A server can make its name and logo look like
+  another's; it cannot change its host or its colour.
+  On notifications the logo is the **large icon**, on the lock screen too;
+  the small icon stays the app's, and the subtext stays the server's host.
+- **When:** read when a server is added, once per app start, and by the
+  background job, each in the background; nothing waits for it. A read is
+  skipped while the last answer's `Cache-Control: max-age` holds (an hour
+  without one, a week at most). The icon (`icon192`, else `url`; `icon512`
+  is not used) is downloaded only when the logo's `etag` changed, and kept
+  per server in `noBackupFilesDir/brand/<server>/`, named by that etag. A
+  push's `icon` and `icon_etag` are not read: a new logo shows after the next
+  read (app start, server add, or the background job).
+- **🔴 Fallbacks:** a muster without the route (`404`) has no branding, and
+  any stored for it is dropped; a network failure or another status keeps
+  what is stored, and that server is not read again (unforced) for an hour;
+  every branding call ends within 20 s; in the background job branding is
+  read last, after the pairing checks, so it never delays a revocation. A
+  `null` logo, an icon that is refused (below), or no stored icon yet, is
+  the colour dot and no large icon.
+- **🔴 What is fetched:** from the server's own origin only. An icon
+  reference is a path resolved against the server's address, or a URL with
+  exactly its scheme, host and port; anything else (another host, `//host`,
+  another port or scheme, user info) is refused before any request.
+  Redirects are not followed; no cookie or credential is sent. An icon is
+  accepted only as `image/png`, at most 1 MiB (by `Content-Length` and by
+  counting the read), with a PNG signature and a declared size of at most
+  2048 px a side, and is decoded subsampled to at most 256 px. A display
+  name loses control and format characters and is cut to 64 characters.
+- **🔴 Per server:** a server's branding is stored under its own id and
+  bound to the origin it was read from; one server's logo or name is never
+  shown for another. Removing a server deletes its branding.
+
 ### A server behind a sign-in gate
 
 A muster can sit behind a sign-in gate at its edge: an SSO proxy that sends a
@@ -316,7 +361,7 @@ release has been published.
 |---|---|
 | `app` | the application: manifest, the launcher activity (server URL, shell, phone settings), the UnifiedPush service, wiring |
 | `core/model` | pure Kotlin: payload v2 and its parser, the action-id table, the action policy, the attachment gate |
-| `core/net` | pure Kotlin: the `/api/device/...` client (OkHttp, no redirects), the signed message and the challenge → action flow |
+| `core/net` | pure Kotlin: the `/api/device/...` client (OkHttp, no redirects), the signed message and the challenge → action flow, the `/api/instance` branding client (same origin only) |
 | `core/auth` | pairing, the step-up key and its policy, the sealed credential store, the muster servers (`Tenants`: one pairing each) |
 | `feature/shell` | the WebView: origin policy, navigation, bridge, insets, pull to refresh, one WebView profile per server |
 | `feature/push` | the push handler (decrypted-only), which server a push is for, the push-host check, registration |

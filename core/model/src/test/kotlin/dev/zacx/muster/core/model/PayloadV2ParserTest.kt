@@ -108,4 +108,5 @@ class PayloadV2ParserTest {
         assertTrue(p.payload.title.endsWith("…"))
         assertTrue(Character.isHighSurrogate(p.payload.title[p.payload.title.length - 3]))
     }
+
 }

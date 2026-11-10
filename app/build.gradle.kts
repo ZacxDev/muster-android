@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -13,8 +14,8 @@ android {
         applicationId = "dev.zacx.muster"
         minSdk = 30
         targetSdk = 36
-        versionCode = 9
-        versionName = "0.3.0"
+        versionCode = 10
+        versionName = "0.4.0"
     }
 
     buildTypes {

@@ -1,12 +1,14 @@
 package dev.zacx.muster.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -38,11 +40,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.zacx.muster.core.auth.DeviceRecord
 import dev.zacx.muster.core.auth.KeyKind
@@ -183,17 +187,59 @@ const val TAG_SETTINGS_REMOVE = "settings-remove"
 /** The menu row for tenant [id]. */
 fun tagTenant(id: String) = "tenant-$id"
 
+/** Tenant [id]'s logo, and its colour dot (shown when it has no logo). */
+fun tagLogo(id: String) = "logo-$id"
+fun tagDot(id: String) = "dot-$id"
+
+/**
+ * A tenant's branding as the switcher shows it (muster `/api/instance`): the
+ * server's display name and its decoded logo. Either may be null, and a
+ * tenant may have none: then the switcher shows what it always did, the
+ * tenant's label (its host) and colour dot.
+ */
+data class ShownBrand(val name: String?, val logo: ImageBitmap?)
+
+/** The name shown for [t]: its server's display name, else its label (the host). */
+fun displayName(t: TenantRecord, brand: ShownBrand?): String = brand?.name ?: t.label
+
+/**
+ * [t]'s logo when it has one, else its colour dot. [keepDot]: the colour dot
+ * stays beside the logo (the switcher bar), since the colour is the app's
+ * and the logo is the server's.
+ */
+@Composable
+private fun TenantMark(t: TenantRecord, brand: ShownBrand?, size: Dp = 20.dp, keepDot: Boolean = false) {
+    val logo = brand?.logo
+    if (logo == null || keepDot) Box(Modifier.testTag(tagDot(t.id))) { ColourDot(t.colour) }
+    if (logo != null) {
+        Image(logo, contentDescription = null, modifier = Modifier.size(size).clip(RoundedCornerShape(4.dp)).testTag(tagLogo(t.id)))
+    }
+}
+
 /**
  * The switcher (muster docs/design/multi-tenant.md, "Switcher UX"): a native
  * bar above the page showing the server in view, its colour and label. A tap
  * opens the menu of servers, then Add server and Manage servers; picking
  * another server switches to it. A long press opens server management.
  * It renders from local state only: a slow server never blocks it.
+ *
+ * [brands] (by tenant id): a server's display name and logo are shown, but
+ * never instead of what the server cannot choose: in the bar the colour dot
+ * (assigned by this app) stays beside the logo and the host stays beside a
+ * display name; in the menu the host stays under it. Two servers publishing
+ * the same name and logo still look different.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun TenantBar(tenants: Tenants, onSelect: (String) -> Unit, onManage: () -> Unit, onAdd: () -> Unit) {
+fun TenantBar(
+    tenants: Tenants,
+    onSelect: (String) -> Unit,
+    onManage: () -> Unit,
+    onAdd: () -> Unit,
+    brands: Map<String, ShownBrand> = emptyMap(),
+) {
     val active = tenants.active ?: return
+    val activeName = displayName(active, brands[active.id])
     var open by remember { mutableStateOf(false) }
     Surface(color = Color(SHELL_BAR), contentColor = Color.White, modifier = Modifier.fillMaxWidth()) {
         Box(Modifier.padding(horizontal = 8.dp, vertical = 2.dp)) {
@@ -206,20 +252,29 @@ fun TenantBar(tenants: Tenants, onSelect: (String) -> Unit, onManage: () -> Unit
                         onClick = { open = true },
                         onLongClick = onManage,
                     )
-                    .semantics { contentDescription = "Server: ${active.label}" }
+                    .semantics { contentDescription = "Server: $activeName" + if (activeName != active.label) " (${active.label})" else "" }
                     .padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                ColourDot(active.colour)
-                Text(active.label, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                TenantMark(active, brands[active.id], keepDot = true)
+                Text(activeName, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                if (activeName != active.label) {
+                    Text(active.label, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 Text("▾", style = MaterialTheme.typography.titleSmall)
             }
             DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
                 tenants.all.forEach { t ->
+                    val brand = brands[t.id]
                     DropdownMenuItem(
-                        text = { Text(t.label + if (t.device.paired) "" else " (not paired)") },
-                        leadingIcon = { ColourDot(t.colour) },
+                        text = {
+                            Column {
+                                Text(displayName(t, brand) + if (t.device.paired) "" else " (not paired)")
+                                if (brand?.name != null) Text(t.label, style = MaterialTheme.typography.bodySmall)
+                            }
+                        },
+                        leadingIcon = { TenantMark(t, brand) },
                         trailingIcon = if (t.id == active.id) ({ Text("✓") }) else null,
                         onClick = {
                             open = false
@@ -254,6 +309,7 @@ fun ServersScreen(
     onRemove: (String) -> Unit,
     onAdd: () -> Unit,
     onClose: (() -> Unit)?,
+    brands: Map<String, ShownBrand> = emptyMap(),
 ) {
     var confirm by remember { mutableStateOf<TenantRecord?>(null) }
     Surface(Modifier.fillMaxSize()) {
@@ -265,8 +321,8 @@ fun ServersScreen(
             tenants.all.forEach { t ->
                 Column(Modifier.fillMaxWidth().testTag("server-${t.id}")) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ColourDot(t.colour)
-                        Text(t.label + if (t.id == tenants.active?.id) " (in view)" else "", style = MaterialTheme.typography.titleMedium)
+                        TenantMark(t, brands[t.id])
+                        Text(displayName(t, brands[t.id]) + if (t.id == tenants.active?.id) " (in view)" else "", style = MaterialTheme.typography.titleMedium)
                     }
                     Text(t.origin, style = MaterialTheme.typography.bodySmall)
                     Text(if (t.device.paired) "Paired" else "Not paired: sign in, then Account → Devices → Pair this phone", style = MaterialTheme.typography.bodySmall)

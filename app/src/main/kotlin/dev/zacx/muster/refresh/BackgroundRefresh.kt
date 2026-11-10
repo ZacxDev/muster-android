@@ -36,6 +36,12 @@ import java.util.concurrent.TimeUnit
  *    ([WebViewPrewarm]), so an open while the process is still cached is a
  *    warm start, not a cold one. Android decides how long a cached process
  *    lives; nothing here keeps it alive.
+ * 3. **Keep each server's branding current** ([branding], LAST, after 1
+ *    and 2, so a slow server's branding can never delay a revocation): its
+ *    `/api/instance` name and logo, no read while the last answer's
+ *    Cache-Control (or a failure's back-off) holds (TenantBranding). Public
+ *    routes, no credential. It runs whatever the outcome, and a failure in
+ *    it changes nothing else.
  *
  * Both only while the phone is paired. Unpaired (or muster ended the
  * pairing on this run), there is nothing to read: the job cancels itself
@@ -51,6 +57,7 @@ class BackgroundRefresh(
     private val onRevoked: suspend () -> Unit,
     private val onNotPaired: suspend () -> Unit,
     private val prewarm: suspend () -> Unit,
+    private val branding: suspend () -> Unit = {},
 ) {
     enum class Outcome { CONFIG_READ, NOT_PAIRED, REVOKED, CONFIG_FAILED }
 
@@ -67,6 +74,7 @@ class BackgroundRefresh(
             Outcome.REVOKED -> { onRevoked(); onNotPaired() }
             Outcome.NOT_PAIRED -> onNotPaired()
         }
+        runCatching { branding() }
         return outcome
     }
 }
@@ -112,6 +120,8 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             onRevoked = {},
             onNotPaired = { app.local.cancelRefresh() },
             prewarm = { prewarmAndWait(applicationContext) },
+            // Each server's name and logo, last: as fresh as its Cache-Control allows.
+            branding = { app.branding.refreshAll(app.tenants.read()) },
         ).run()
         android.util.Log.i("muster", "background refresh: $outcome")
         // Never a retry: the next period is the retry.
