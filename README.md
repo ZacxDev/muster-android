@@ -381,7 +381,9 @@ nix develop                 # JDK 17 + SDK (platform 37.0, build-tools 36.0.0)
 ./gradlew test              # unit tests (JVM; notifications on Robolectric, API 30 and 34)
 ./gradlew assembleDebug     # app/build/outputs/apk/debug/app-debug.apk
 ./gradlew assembleRelease   # the UNSIGNED release APK
+./gradlew bundleRelease     # the UNSIGNED release App Bundle, for Play
 scripts/tests/sign-release-test.sh   # the signing script, with a throwaway key
+scripts/tests/sign-bundle-test.sh    # the bundle signing script, likewise
 ```
 
 `nix develop .#spikes` adds the emulator, x86_64 `google_apis` images for API
@@ -425,10 +427,23 @@ pinned by commit SHA.
 
 ## Distribution
 
-The app is sideloaded. Updates come from a self-hosted over-the-air channel
-and an in-app updater (Phase 5). The signed APKs are also attached to GitHub
-Releases, so [Obtainium](https://github.com/ImranR98/Obtainium) works too.
-There is no Play Store build.
+The signed APKs are attached to GitHub Releases, so
+[Obtainium](https://github.com/ImranR98/Obtainium) works too. Updates are
+planned to come from a self-hosted over-the-air channel and an in-app updater
+(Phase 5), which must stay out of the Play build.
+
+### Google Play
+
+The app is also published on Google Play (the operator's decision; it
+supersedes "no Play Store build" in muster's design doc). Play App Signing
+uses the **existing release key**, so the Play build has the same certificate
+as the sideloaded APKs, and the `apk-key-hash` origin and `assetlinks.json`
+do not change. Everything is in [`docs/play-store.md`](docs/play-store.md):
+enrolling the key with PEPK (`scripts/play-export-key`), building and signing
+the App Bundle (`./gradlew bundleRelease`, then `scripts/sign-bundle`), the
+versionCode plan, the Play-readiness audit and the Console checklist. The
+[privacy policy](docs/privacy-policy.md) and the
+[store listing draft](docs/play-listing.md) are beside it.
 
 ## Spikes
 
