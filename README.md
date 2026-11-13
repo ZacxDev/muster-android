@@ -441,7 +441,8 @@ as the sideloaded APKs, and the `apk-key-hash` origin and `assetlinks.json`
 do not change. Everything is in [`docs/play-store.md`](docs/play-store.md):
 enrolling the key with PEPK (`scripts/play-export-key`), building and signing
 the App Bundle (`./gradlew bundleRelease`, then `scripts/sign-bundle`), the
-versionCode plan, the Play-readiness audit and the Console checklist. The
+versionCode plan, the no-self-update rule for the Play build, the
+permission answers and the Console checklist. The
 [privacy policy](docs/privacy-policy.md) and the
 [store listing draft](docs/play-listing.md) are beside it.
 

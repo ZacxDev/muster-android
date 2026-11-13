@@ -89,11 +89,12 @@ Never pass `--keystore-pass=` on a command line by hand: it lands in shell
 history and in every process listing. If the Console shows a command with
 different flags, follow the Console and tell the script's maintainer.
 
-`scripts/tests/play-export-key-test.sh` (needs `PEPK_JAR`; not in CI, because
-pepk.jar is Google's download) runs the script against a throwaway keystore
-and a throwaway encryption key, and checks that the password appears in no
-process's argv (with a control that the check does see a process carrying it)
-and not in the output.
+`scripts/tests/play-export-key-test.sh` runs the script against a throwaway
+keystore and a throwaway encryption key, and checks that the password appears
+in no process's argv (with a control that the check does see a process
+carrying it) and not in the output. It needs `PEPK_JAR` (pepk.jar is Google's
+download), so it is not in CI: run it once, with the Console's pepk.jar,
+before the real export.
 
 ## Each release: build and sign the App Bundle
 
@@ -136,15 +137,6 @@ throwaway key, and CI runs it.
 The GitHub release APK comes from the same commit, signed with
 `scripts/sign-release` as before (README, "Signing").
 
-Measured 2026-11-13 at `3c7f388` (v0.4.0, versionCode 10): `bundleRelease`
-built, `scripts/sign-bundle` signed it with the release key and verified it
-(566 of 566 entries signed, SHA-256 digests, SHA384withRSA 4096-bit), and
-`keytool -printcert -jarfile` independently reported signer
-`CN=muster-android, O=ZacxDev`, SHA-256
-`F6:60:22:2A:46:36:33:F6:E6:5A:87:A1:70:1D:9E:C8:62:36:4B:A4:64:9E:8E:09:D3:4B:81:71:AD:20:F5:E6`.
-Not yet run: Play's own validation of the bundle (no Console yet) and
-`bundletool` (not in the flake).
-
 ## versionCode: one sequence for both channels
 
 Play needs every upload's versionCode to be higher than every versionCode
@@ -164,26 +156,19 @@ Android refuses to install a lower versionCode over a higher one.
 - A rejected or abandoned Play upload still uses its number. Bump and
   rebuild; do not try to reuse it.
 
-## Play-readiness audit (2026-11-13, at `3c7f388`)
+## 🔴 No self-update in the Play build
 
-Read from the merged release manifest the bundle carries
-(`app/build/intermediates/bundle_manifest/release/…/AndroidManifest.xml`),
-the release runtime classpath (`./gradlew :app:dependencies --configuration
-releaseRuntimeClasspath`) and the sources.
+Play's Device and Network Abuse policy forbids an app distributed on Play
+from updating itself by any means other than Play, and
+`REQUEST_INSTALL_PACKAGES` is a restricted permission. The in-app updater
+planned for Phase 5 must therefore never ship in the Play bundle: give it a
+build flavor (or a build-time switch) that leaves the updater and that
+permission out of what `bundleRelease` produces.
 
-| Item | Finding | Verdict |
-|---|---|---|
-| **targetSdk** | `targetSdkVersion="36"` in the merged manifest. Play: "Starting August 31 2026: New apps and app updates must target Android 16 (API level 36) or higher" ([developer.android.com/google/play/requirements/target-sdk](https://developer.android.com/google/play/requirements/target-sdk), read 2026-11-13). | Meets it. Raise it when Play announces the next level (planned 37, README). |
-| **16 KB pages** | The bundle's only native libraries are AndroidX's (`libandroidx.graphics.path.so`, `libdatastore_shared_counter.so`, four ABIs each); every `LOAD` segment is aligned to 16384. | OK. |
-| **Self-update** | No `REQUEST_INSTALL_PACKAGES`, no `PackageInstaller`, no `ACTION_INSTALL_PACKAGE`, no APK MIME type anywhere in the sources or the merged manifest. | OK today. 🔴 The in-app updater planned for Phase 5 must not ship in the Play build: Play's Device and Network Abuse policy forbids an app from Play updating itself by any means other than Play, and `REQUEST_INSTALL_PACKAGES` is a restricted permission. Give Phase 5 a build flavor (or a build-time switch) that leaves the updater and the permission out of the bundle. |
-| **Debug receiver** | The app's own `RunRefreshReceiver` (exported, `android.permission.DUMP`) is declared only in `app/src/debug/AndroidManifest.xml`; it is absent from the release manifest. The release manifest has two exported DUMP-guarded receivers, both AndroidX's: WorkManager's `DiagnosticsReceiver` and `ProfileInstallReceiver`. Both ship in every app that uses those libraries; DUMP cannot be held by an installed app. | OK; nothing to change. |
-| **WebView debugging** | `setWebContentsDebuggingEnabled(true)` is in `app/src/debug` only. | OK. |
-| **Backup / transport** | `allowBackup="false"`, data extraction rules exclude everything, cleartext off, system CAs only. | OK. |
-| **Package visibility** | `<queries>` names only intents (Custom Tabs, UnifiedPush distributor link/register/unregister); no `QUERY_ALL_PACKAGES`. | OK. |
-| **Foreground services** | `FOREGROUND_SERVICE` comes from WorkManager's manifest; no service declares a `foregroundServiceType` and the app never calls `setForeground`/`startForeground`. | No FGS declaration in Console expected. If Console asks, the answer is "none used". |
-| **Trackers / ads** | The release classpath is AndroidX, Kotlin/kotlinx, OkHttp/Okio, the UnifiedPush connector and its Tink/protobuf/Gson, jspecify/jsr305/errorprone annotations. No Google Play services, Firebase, analytics, crash reporting or ad SDK. | Data safety: no SDK collects anything. |
+## Permissions: answers for Play Console
 
-### Permissions (merged release manifest)
+What each permission in the release manifest is for, for the Console's
+questions and a reviewer's.
 
 | Permission | From | Why | Play-restricted? |
 |---|---|---|---|
@@ -195,9 +180,9 @@ releaseRuntimeClasspath`) and the sources.
 | `WAKE_LOCK`, `ACCESS_NETWORK_STATE`, `RECEIVE_BOOT_COMPLETED`, `FOREGROUND_SERVICE` | WorkManager | The 15-minute background refresh (network-constrained, rescheduled after reboot). | No. |
 | `dev.zacx.muster.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` | `androidx.core` | Signature permission AndroidX uses for its own non-exported dynamic receivers. | No. |
 
-No permission is on Play's restricted list (SMS, call log, all files access,
-`QUERY_ALL_PACKAGES`, background location, `REQUEST_INSTALL_PACKAGES`,
-accessibility, exact alarms, full-screen intent, health).
+No permission is on Play's restricted list. The app uses no foreground
+service type (`FOREGROUND_SERVICE` comes from WorkManager): if the Console
+asks for a foreground service declaration, the answer is "none used".
 
 ## In Play Console: the operator's list
 

@@ -140,20 +140,14 @@ app, not a game).
 
 ## Data safety form
 
-Play defines "collection" as "transmitting data from your app off a user's
-device", including through WebViews the app controls
-([Play Console Help 10787469](https://support.google.com/googleplay/android-developer/answer/10787469)).
-It does not address apps whose only destination is a server the user runs
-and chooses. Two readings:
+**Decided: what the app sends to the user's muster server is declared as
+collected, not shared, for app functionality.** Play defines "collection" as
+"transmitting data from your app off a user's device", including through
+WebViews the app controls
+([Play Console Help 10787469](https://support.google.com/googleplay/android-developer/answer/10787469)),
+and every row below is true under that definition.
 
-- **Recommended (conservative): declare what the app sends to the user's
-  muster server as collected**, not shared, for app functionality. It cannot
-  be called inaccurate, and every row is true.
-- Alternative: "No data collected", on the grounds that the developer
-  receives nothing. Shorter, but a reviewer applying the definition literally
-  could call it a misdeclaration. **Operator's call.**
-
-Answers for the recommended reading:
+Answers:
 
 | Question | Answer |
 |---|---|
@@ -179,5 +173,5 @@ purpose **App functionality** (and **Account management** where marked):
 
 Not collected: location, contacts, calendar, financial info, health,
 web browsing history, installed apps, crash logs, diagnostics, advertising ID.
-No SDK in the app collects anything (no Google Play services, Firebase,
-analytics, ads or crash reporting: [play-store.md](play-store.md), audit).
+No SDK in the app collects anything: its dependencies include no Google Play
+services, Firebase, analytics, ads or crash reporting.
