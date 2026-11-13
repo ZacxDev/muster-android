@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# sign-bundle: sign an UNSIGNED release App Bundle (.aab) for Google Play,
+# offline, on the machine that holds the release key. Never run in CI: CI
+# never holds the release key. The APK twin is scripts/sign-release.
+#
+#   scripts/sign-bundle <unsigned.aab> <keystore> <key-alias> <expected-cert-sha256> [out.aab]
+#   scripts/sign-bundle --verify <signed.aab> <expected-cert-sha256>
+#
+# The bundle is signed with the UPLOAD key. The operator enrols Play App
+# Signing by uploading the existing release key as the app signing key
+# (docs/play-store.md), and keeps that same key as the upload key, so Play's
+# APKs carry the same certificate as the sideloaded ones.
+#
+# 1. optionally checks the unsigned bundle's sha256 (AAB_SHA256=<hex>);
+# 2. jarsigner, SHA-256 digests (an App Bundle is signed with the JAR
+#    scheme; Play re-signs the APKs it generates with the app signing key);
+# 3. verifies, and refuses the output unless jarsigner verifies it, EVERY
+#    entry is signed (jarsigner alone exits 0 on a bundle with an unsigned
+#    entry added after signing), and every signer certificate's SHA-256
+#    equals <expected-cert-sha256>. --verify runs this step alone.
+#
+# KS_PASS is required: `file:/path` or `env:NAME` (the same spellings as
+# scripts/sign-release; they become jarsigner's -storepass:file /
+# -storepass:env, so the password is never in argv). There is no prompt:
+# jarsigner's output is captured, so a prompt would be invisible. The key password is the keystore password (PKCS#12).
+# Exit codes: 0 signed and verified; 2 usage; 3 the input sha256 is wrong;
+# 4 the certificate is not the expected one; 5 it did not verify.
+set -euo pipefail
+
+usage() { sed -n '2,27p' "$0" >&2; exit 2; }
+norm() { tr -d ': \n' | tr '[:upper:]' '[:lower:]'; }
+check_want() {
+    want=$(printf '%s' "$1" | norm)
+    [[ "$want" =~ ^[0-9a-f]{64}$ ]] || { echo "sign-bundle: the expected certificate SHA-256 must be 64 hex digits" >&2; exit 2; }
+}
+command -v jarsigner >/dev/null 2>&1 && command -v keytool >/dev/null 2>&1 && command -v jar >/dev/null 2>&1 \
+    || { echo "sign-bundle: jarsigner, keytool and jar must be on PATH (nix develop)" >&2; exit 2; }
+
+# verify_bundle <signed.aab>: exits 5 or 4 unless the bundle is wholly signed
+# by the certificate $want.
+verify_bundle() {
+    local f=$1 log entries signed digests
+    log=$(jarsigner -verify -verbose "$f" 2>&1) || { printf '%s\n' "$log" >&2; echo "sign-bundle: REFUSED: jarsigner does not verify $f" >&2; exit 5; }
+    grep -qx 'jar verified.' <<<"$log" || { printf '%s\n' "$log" >&2; echo "sign-bundle: REFUSED: jarsigner does not verify $f" >&2; exit 5; }
+    # Every file entry except the signature's own files must be listed "sm"
+    # (signature verified, in the manifest). Counted, not grepped for a
+    # warning: the count does not depend on jarsigner's wording.
+    entries=$(jar tf "$f" | grep -v '/$' | grep -cvE '^META-INF/(MANIFEST\.MF|[^/]+\.(SF|RSA|EC|DSA))$' || true)
+    signed=$(grep -cE '^sm[a-z]* ' <<<"$log" || true)
+    if [[ "$entries" -eq 0 || "$signed" -ne "$entries" ]]; then
+        echo "sign-bundle: REFUSED: $signed of $entries entries are signed in $f" >&2
+        exit 5
+    fi
+    digests=$(keytool -printcert -jarfile "$f" | grep -E '^[[:space:]]*SHA256:' \
+        | sed 's/.*SHA256: *//' | while read -r d; do printf '%s' "$d" | norm; echo; done | sort -u || true)
+    if [[ -z "$digests" ]]; then
+        echo "sign-bundle: REFUSED: keytool reported no signer certificate in $f" >&2
+        exit 4
+    fi
+    if [[ "$digests" != "$want" ]]; then
+        echo "sign-bundle: REFUSED: the signing certificate is $digests, not the recorded $want. Wrong key?" >&2
+        exit 4
+    fi
+}
+
+if [[ "${1:-}" == "--verify" ]]; then
+    [[ $# -eq 3 ]] || usage
+    [[ -f "$2" ]] || { echo "sign-bundle: no such bundle: $2" >&2; exit 2; }
+    check_want "$3"
+    verify_bundle "$2"
+    echo "sign-bundle: $2 verifies; every entry signed; certificate SHA-256 $want"
+    exit 0
+fi
+
+[[ $# -ge 4 && $# -le 5 ]] || usage
+in=$1 ks=$2 alias=$3
+out=${5:-${in%.aab}-signed.aab}
+[[ "$out" != "$in" ]] || { echo "sign-bundle: the output must not be the input" >&2; exit 2; }
+[[ -f "$in" ]] || { echo "sign-bundle: no such bundle: $in" >&2; exit 2; }
+[[ -f "$ks" ]] || { echo "sign-bundle: no such keystore: $ks" >&2; exit 2; }
+check_want "$4"
+
+pass=()
+case "${KS_PASS:-}" in
+    "") echo "sign-bundle: set KS_PASS=file:/path or env:NAME (the keystore password; there is no prompt)" >&2; exit 2 ;;
+    file:*) pass=(-storepass:file "${KS_PASS#file:}") ;;
+    env:*) pass=(-storepass:env "${KS_PASS#env:}") ;;
+    *) echo "sign-bundle: KS_PASS must be file:/path or env:NAME" >&2; exit 2 ;;
+esac
+
+if [[ -n "${AAB_SHA256:-}" ]]; then
+    got=$(sha256sum "$in" | cut -d' ' -f1)
+    if [[ "$got" != "$(printf '%s' "$AAB_SHA256" | norm)" ]]; then
+        echo "sign-bundle: REFUSED: $in has sha256 $got, not the expected $AAB_SHA256" >&2
+        exit 3
+    fi
+fi
+
+# A bundle that already carries a JAR signature would come out with two.
+if jar tf "$in" | grep -qE '^META-INF/[^/]+\.(SF|RSA|EC|DSA)$'; then
+    echo "sign-bundle: REFUSED: $in is already signed; give it the unsigned bundle" >&2
+    exit 2
+fi
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+cp "$in" "$work/in.aab"
+
+jarsigner -keystore "$ks" "${pass[@]}" -digestalg SHA-256 \
+    -signedjar "$work/signed.aab" "$work/in.aab" "$alias" >"$work/sign.log" 2>&1 \
+    || { cat "$work/sign.log" >&2; echo "sign-bundle: jarsigner failed" >&2; exit 5; }
+
+verify_bundle "$work/signed.aab"
+
+mv "$work/signed.aab" "$out"
+echo "sign-bundle: signed $out"
+echo "sign-bundle: certificate SHA-256 $want (matches the recorded fingerprint)"
+echo "sign-bundle: sha256 $(sha256sum "$out" | cut -d' ' -f1)"

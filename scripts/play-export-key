@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+# play-export-key: export the release key for Play App Signing ("Export and
+# upload a key from Java keystore"), with Google's PEPK tool, on the machine
+# that holds the key. Run once, when enrolling the app in Play App Signing.
+# Never in CI. docs/play-store.md has the whole procedure.
+#
+#   PEPK_JAR=<pepk.jar> scripts/play-export-key <keystore> <key-alias> \
+#       <encryption_public_key.pem> <expected-cert-sha256> <out.zip>
+#
+# pepk.jar and encryption_public_key.pem both come from Play Console (the
+# "Export and upload a key from Java keystore" option). PEPK_SHA256=<hex>
+# also checks the jar.
+#
+# 🔴 The password. pepk takes it only as a command-line flag
+# (--keystore-pass) or from a terminal prompt (System.console(): with stdin
+# redirected it crashes, and under a pseudo-terminal the terminal echoes the
+# piped password into the output). So with KS_PASS=file:/path this script
+# writes the launch (-jar, the jar, the flag) into a java @argfile in a private temp dir (mode 0700,
+# deleted on exit): the java process's argv is `java @<file> …`, never the
+# password. Without KS_PASS, pepk prompts on the terminal (twice: keystore,
+# then key; the key password is the keystore password for this PKCS#12).
+#
+# The output zip holds the private key ENCRYPTED to Google's key, plus the
+# certificate (--include-cert). It is still key material: the script refuses
+# an output path inside a git work tree, and writes it mode 0600.
+# Exit codes: 0 exported and checked; 2 usage; 3 the jar's sha256 is wrong;
+# 4 the exported certificate is not the expected one; 5 pepk failed.
+set -euo pipefail
+
+usage() { sed -n '2,27p' "$0" >&2; exit 2; }
+[[ $# -eq 5 ]] || usage
+ks=$1 alias=$2 enc=$3 want=$4 out=$5
+jar=${PEPK_JAR:-}
+[[ -n "$jar" && -f "$jar" ]] || { echo "play-export-key: set PEPK_JAR to the pepk.jar from Play Console" >&2; exit 2; }
+[[ -f "$ks" ]] || { echo "play-export-key: no such keystore: $ks" >&2; exit 2; }
+[[ -f "$enc" ]] || { echo "play-export-key: no such encryption key: $enc" >&2; exit 2; }
+[[ ! -e "$out" ]] || { echo "play-export-key: $out exists; refusing to overwrite" >&2; exit 2; }
+command -v java >/dev/null 2>&1 && command -v keytool >/dev/null 2>&1 && command -v jar >/dev/null 2>&1 \
+    || { echo "play-export-key: java, keytool and jar must be on PATH (nix develop)" >&2; exit 2; }
+
+norm() { tr -d ': \n' | tr '[:upper:]' '[:lower:]'; }
+want=$(printf '%s' "$want" | norm)
+[[ "$want" =~ ^[0-9a-f]{64}$ ]] || { echo "play-export-key: the expected certificate SHA-256 must be 64 hex digits" >&2; exit 2; }
+
+outdir=$(CDPATH= cd -- "$(dirname -- "$out")" && pwd) || { echo "play-export-key: no such directory for $out" >&2; exit 2; }
+# Inside a git work tree? Look for a .git (a directory, or a worktree's
+# file) in every directory up to /, so the refusal needs no git binary.
+d=$outdir
+while :; do
+    if [[ -e "$d/.git" ]]; then
+        echo "play-export-key: REFUSED: $outdir is inside a git work tree ($d); write the zip to a private directory" >&2
+        exit 2
+    fi
+    [[ "$d" == / ]] && break
+    d=$(dirname -- "$d")
+done
+
+if [[ -n "${PEPK_SHA256:-}" ]]; then
+    got=$(sha256sum "$jar" | cut -d' ' -f1)
+    if [[ "$got" != "$(printf '%s' "$PEPK_SHA256" | norm)" ]]; then
+        echo "play-export-key: REFUSED: $jar has sha256 $got, not $PEPK_SHA256" >&2
+        exit 3
+    fi
+fi
+
+umask 077
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+args=(-jar "$jar")
+case "${KS_PASS:-}" in
+    "") ;;
+    file:*)
+        pf=${KS_PASS#file:}
+        [[ -r "$pf" ]] || { echo "play-export-key: cannot read the password file" >&2; exit 2; }
+        pw=""
+        IFS= read -r pw <"$pf" || true
+        [[ -n "$pw" ]] || { echo "play-export-key: the password file is empty" >&2; exit 2; }
+        case "$jar" in *'"'* | *'\'*) echo "play-export-key: the PEPK_JAR path holds \" or \\" >&2; exit 2 ;; esac
+        # A java @argfile treats " and \ specially inside quotes.
+        case "$pw" in *'"'* | *'\'*) echo "play-export-key: the password holds \" or \\; run without KS_PASS and type it at pepk's prompt" >&2; exit 2 ;; esac
+        # The WHOLE launch goes in the argfile: -jar, the jar, then the flag.
+        # An argfile before -jar holding only the flag is read as a JVM option,
+        # and the JVM prints it back ("Unrecognized option: --keystore-pass=…").
+        printf -- '-jar\n"%s"\n--keystore-pass="%s"\n' "$jar" "$pw" >"$work/pass.args"
+        unset pw
+        args=("@$work/pass.args")
+        ;;
+    *) echo "play-export-key: KS_PASS must be file:/path (or unset, to be prompted)" >&2; exit 2 ;;
+esac
+
+if ! java "${args[@]}" --keystore="$ks" --alias="$alias" --output="$work/out.zip" \
+    --include-cert --rsa-aes-encryption --encryption-key-path="$enc"; then
+    echo "play-export-key: pepk failed" >&2
+    exit 5
+fi
+rm -f "$work/pass.args"
+
+# The zip must hold the encrypted key and the expected certificate.
+(CDPATH= cd "$work" && mkdir x && CDPATH= cd x && jar xf ../out.zip)
+[[ -s "$work/x/encryptedPrivateKey" && -s "$work/x/certificate.pem" ]] \
+    || { echo "play-export-key: REFUSED: the zip lacks encryptedPrivateKey or certificate.pem" >&2; exit 5; }
+got=$(keytool -printcert -file "$work/x/certificate.pem" | grep -m1 -E '^[[:space:]]*SHA256:' | sed 's/.*SHA256: *//' | norm)
+if [[ "$got" != "$want" ]]; then
+    echo "play-export-key: REFUSED: the exported certificate is $got, not the recorded $want. Wrong key?" >&2
+    exit 4
+fi
+
+mv "$work/out.zip" "$out"
+chmod 600 "$out"
+echo "play-export-key: wrote $out (upload it in Play Console, then delete it)"
+echo "play-export-key: certificate SHA-256 $got (matches the recorded fingerprint)"
