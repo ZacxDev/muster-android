@@ -41,36 +41,45 @@ check() { # name, want-exit, got-exit
     if [[ "$2" == "$3" ]]; then echo "ok   $1"; pass=$((pass + 1)); else echo "FAIL $1: exit $3, want $2"; sed 's/^/     | /' "$tmp/log"; fail=$((fail + 1)); fi
 }
 
-# The happy path, watching every process's argv for the password meanwhile.
-set +e
-KS_PASS=file:$tmp/pass "$exp" "$tmp/t.p12" t "$tmp/enc.pem" "$fp" "$tmp/private/out.zip" >"$tmp/log" 2>&1 &
-pid=$!
-seen=0
-# pgrep scans every process's command line in one pass, fast enough to
-# catch the short-lived java (a per-process shell loop was too slow and
-# missed it: a mutant that put the password in argv survived).
-while kill -0 "$pid" 2>/dev/null; do
-    if pgrep -f -- "$secret" >/dev/null; then seen=1; fi
+# A `java` first on PATH that records every argument it is given (one per
+# line), and the contents of any @argfile among them, then runs the real
+# java. Deterministic, unlike sampling the process table: a pgrep loop missed
+# a short-lived java that had the password in its argv.
+real_java=$(command -v java)
+mkdir "$tmp/bin"
+cat >"$tmp/bin/java" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do
+    printf '%s\n' "\$a" >>"$tmp/argv.log"
+    if [[ "\$a" == @* && -f "\${a#@}" ]]; then cat "\${a#@}" >>"$tmp/argfile.log"; fi
 done
-wait "$pid"; rc=$?
+exec "$real_java" "\$@"
+EOF
+chmod +x "$tmp/bin/java"
+: >"$tmp/argv.log"; : >"$tmp/argfile.log"
+
+# The happy path, through the recording java.
+set +e
+PATH=$tmp/bin:$PATH KS_PASS=file:$tmp/pass "$exp" "$tmp/t.p12" t "$tmp/enc.pem" "$fp" "$tmp/private/out.zip" >"$tmp/log" 2>&1; rc=$?
 set -e
 check "exports and checks the certificate" 0 "$rc"
-check "the password is in no process's argv" 0 "$seen"
+# Positive controls: the recording java saw pepk's launch, and the password
+# did reach java (through the argfile), so the zero below is a measurement.
+grep -qx -- "--alias=t" "$tmp/argv.log" && check "control: the recording java saw pepk's launch" 0 0 \
+    || check "control: the recording java saw pepk's launch" 0 1
+grep -qF -- "$secret" "$tmp/argfile.log" && check "control: the password reached java through the argfile" 0 0 \
+    || check "control: the password reached java through the argfile" 0 1
+n=$(grep -cF -- "$secret" "$tmp/argv.log" || true)
+if [[ "$n" -eq 0 ]]; then
+    check "the password is in java's argv 0 times" 0 0
+else
+    echo "the password is in java's argv $n time(s)" >"$tmp/log"
+    check "the password is in java's argv 0 times" 0 1
+fi
 if grep -qF -- "$secret" "$tmp/log"; then check "the password is not in the output" 0 1; else check "the password is not in the output" 0 0; fi
 [[ "$(stat -c %a "$tmp/private/out.zip" 2>/dev/null)" == 600 ]] && check "the zip is mode 0600" 0 0 || check "the zip is mode 0600" 0 1
 jar tf "$tmp/private/out.zip" | sort | tr '\n' ' ' | grep -qx 'certificate.pem encryptedPrivateKey ' \
     && check "the zip holds the encrypted key and the certificate" 0 0 || check "the zip holds the encrypted key and the certificate" 0 1
-
-# Positive control for the argv watch: a process carrying the secret IS seen.
-set +e
-bash -c 'sleep 3; :' "$secret" &
-ctl=$!
-seen=0
-sleep 0.5
-if pgrep -f -- "$secret" >/dev/null; then seen=1; fi
-kill "$ctl" 2>/dev/null; wait "$ctl" 2>/dev/null
-set -e
-check "control: the argv watch sees a process carrying the secret" 1 "$seen"
 
 set +e
 KS_PASS=file:$tmp/pass "$exp" "$tmp/t.p12" t "$tmp/enc.pem" "$other" "$tmp/private/wrong.zip" >"$tmp/log" 2>&1; rc=$?
@@ -83,6 +92,15 @@ KS_PASS=file:$tmp/pass "$exp" "$tmp/t.p12" t "$tmp/enc.pem" "$fp" "$root/out.zip
 set -e
 check "refuses an output inside a git work tree (exit 2)" 2 "$rc"
 [[ ! -e "$root/out.zip" ]] && check "nothing written in the work tree" 0 0 || { rm -f "$root/out.zip"; check "nothing written in the work tree" 0 1; }
+
+# The same refusal with no working git on PATH (a stub that fails like a
+# missing binary): it must not depend on git.
+mkdir "$tmp/nogit" && printf '#!/bin/sh\nexit 127\n' >"$tmp/nogit/git" && chmod +x "$tmp/nogit/git"
+set +e
+PATH=$tmp/nogit:$PATH KS_PASS=file:$tmp/pass "$exp" "$tmp/t.p12" t "$tmp/enc.pem" "$fp" "$root/out.zip" >"$tmp/log" 2>&1; rc=$?
+set -e
+check "refuses an output inside a git work tree without git (exit 2)" 2 "$rc"
+[[ ! -e "$root/out.zip" ]] && check "nothing written in the work tree without git" 0 0 || { rm -f "$root/out.zip"; check "nothing written in the work tree without git" 0 1; }
 
 set +e
 KS_PASS=file:$tmp/pass "$exp" "$tmp/t.p12" t "$tmp/enc.pem" "$fp" "$tmp/private/out.zip" >"$tmp/log" 2>&1; rc=$?

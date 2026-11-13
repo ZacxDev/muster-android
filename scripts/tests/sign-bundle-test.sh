@@ -69,6 +69,10 @@ run "$sign" --verify "$tmp/tampered.aab" "$fp"
 check "--verify refuses a bundle with an unsigned entry (exit 5)" 5 "$rc"
 grep -q "of .* entries are signed" "$tmp/log" && check "says which entries are unsigned" 0 0 || check "says which entries are unsigned" 0 1
 
+KS_PASS= run "$sign" "$tmp/in.aab" "$tmp/t.p12" t "$fp" "$tmp/np.aab"
+check "refuses to run without KS_PASS (exit 2)" 2 "$rc"
+grep -q "there is no prompt" "$tmp/log" && check "says why" 0 0 || check "says why" 0 1
+
 KS_PASS=pass:literal run "$sign" "$tmp/in.aab" "$tmp/t.p12" t "$fp" "$tmp/z.aab"
 check "refuses a password spec other than file:/env: (exit 2)" 2 "$rc"
 

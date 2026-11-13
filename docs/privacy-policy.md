@@ -124,9 +124,11 @@ deletes everything.
 ## What the app does not do
 
 No analytics, advertising, crash reporting or tracking. No location, contacts,
-camera, call log, SMS or list of installed apps. No advertising ID or other
-device identifier. No data sold or shared with anyone by the developer: the
-developer receives none.
+camera, call log, SMS or list of installed apps. No advertising ID. The only
+device identifiers the app sends are the ones listed above (the device name,
+the step-up public key and the push address), and only to the muster server
+you add. No data sold or shared with anyone by the developer: the developer
+receives none.
 
 ## Your data on a muster server
 

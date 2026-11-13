@@ -47,11 +47,16 @@ App signing).
    install -d -m 700 ~/.local/share/muster-android/play
    # save both downloads there
    ```
-3. Run the export (in `nix develop`, from this repo):
+3. Pin the jar. If the Console page shows a checksum for pepk.jar, use it;
+   otherwise record the sha256 of the jar you downloaded
+   (`sha256sum "$P/pepk.jar"`) and keep it with the release notes. The
+   script checks the jar against `PEPK_SHA256` only when it is set, so set
+   it. Then run the export (in `nix develop`, from this repo):
    ```sh
    R=~/.local/share/muster-android/release
    P=~/.local/share/muster-android/play
-   PEPK_JAR=$P/pepk.jar KS_PASS=file:$R/keystore.pass \
+   PEPK_JAR=$P/pepk.jar PEPK_SHA256=<sha256 of pepk.jar> \
+   KS_PASS=file:$R/keystore.pass \
      scripts/play-export-key "$R/muster-release.p12" muster-release \
        "$P/encryption_public_key.pem" \
        f660222a463633f6e65a87a1701d9ec862364ba4649e8e09d34b8171ad20f5e6 \
@@ -65,7 +70,8 @@ App signing).
    SHA-256** must read `F6:60:22:2A:…:F5:E6` (the fingerprint above). Then
    delete the zip and pepk.jar:
    ```sh
-   rm -f ~/.local/share/muster-android/play/muster-release-pepk.zip
+   rm -f ~/.local/share/muster-android/play/muster-release-pepk.zip \
+         ~/.local/share/muster-android/play/pepk.jar
    ```
 
 🔴 **The password, and why there is a script.** pepk reads the keystore

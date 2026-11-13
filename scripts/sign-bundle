@@ -19,10 +19,10 @@
 #    entry added after signing), and every signer certificate's SHA-256
 #    equals <expected-cert-sha256>. --verify runs this step alone.
 #
-# The keystore password is asked for by jarsigner itself, unless KS_PASS is
-# set to `file:/path` or `env:NAME` (the same spellings as scripts/sign-release;
-# they become jarsigner's -storepass:file / -storepass:env, so the password is
-# never in argv). The key password is the keystore password (PKCS#12).
+# KS_PASS is required: `file:/path` or `env:NAME` (the same spellings as
+# scripts/sign-release; they become jarsigner's -storepass:file /
+# -storepass:env, so the password is never in argv). There is no prompt:
+# jarsigner's output is captured, so a prompt would be invisible. The key password is the keystore password (PKCS#12).
 # Exit codes: 0 signed and verified; 2 usage; 3 the input sha256 is wrong;
 # 4 the certificate is not the expected one; 5 it did not verify.
 set -euo pipefail
@@ -82,7 +82,7 @@ check_want "$4"
 
 pass=()
 case "${KS_PASS:-}" in
-    "") ;;
+    "") echo "sign-bundle: set KS_PASS=file:/path or env:NAME (the keystore password; there is no prompt)" >&2; exit 2 ;;
     file:*) pass=(-storepass:file "${KS_PASS#file:}") ;;
     env:*) pass=(-storepass:env "${KS_PASS#env:}") ;;
     *) echo "sign-bundle: KS_PASS must be file:/path or env:NAME" >&2; exit 2 ;;

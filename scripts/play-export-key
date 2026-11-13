@@ -43,10 +43,17 @@ want=$(printf '%s' "$want" | norm)
 [[ "$want" =~ ^[0-9a-f]{64}$ ]] || { echo "play-export-key: the expected certificate SHA-256 must be 64 hex digits" >&2; exit 2; }
 
 outdir=$(CDPATH= cd -- "$(dirname -- "$out")" && pwd) || { echo "play-export-key: no such directory for $out" >&2; exit 2; }
-if git -C "$outdir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    echo "play-export-key: REFUSED: $outdir is inside a git work tree; write the zip to a private directory" >&2
-    exit 2
-fi
+# Inside a git work tree? Look for a .git (a directory, or a worktree's
+# file) in every directory up to /, so the refusal needs no git binary.
+d=$outdir
+while :; do
+    if [[ -e "$d/.git" ]]; then
+        echo "play-export-key: REFUSED: $outdir is inside a git work tree ($d); write the zip to a private directory" >&2
+        exit 2
+    fi
+    [[ "$d" == / ]] && break
+    d=$(dirname -- "$d")
+done
 
 if [[ -n "${PEPK_SHA256:-}" ]]; then
     got=$(sha256sum "$jar" | cut -d' ' -f1)
