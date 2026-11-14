@@ -34,9 +34,19 @@
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.NoActionBar">
 
-        <!-- The launcher activity: server URL, the WebView shell, phone settings. -->
+        <!-- The launcher activity: server URL, the WebView shell, phone settings.
+             configChanges: rotation, a window resize (multi-window, a
+             foldable), display size (density), dark mode and a keyboard never
+             re-create it. Re-creating it destroyed the WebView and reloaded
+             muster at its home page; now the live page keeps its place,
+             scroll, input and connections. Font size and weight are left out
+             on purpose: whether a live WebView picks up a new system font
+             scale is not verified, so those re-create the activity. Anything
+             not listed, and process death, re-creates it: ShellRestore puts
+             the shell back on the page it showed. -->
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|density|uiMode|keyboard|keyboardHidden|navigation"
             android:exported="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>

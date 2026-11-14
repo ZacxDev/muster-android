@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
@@ -21,15 +22,17 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.createBitmap
@@ -52,6 +55,7 @@ import dev.zacx.muster.feature.shell.ShellRefreshLayout
 import dev.zacx.muster.feature.shell.ShellWebView
 import dev.zacx.muster.push.MusterPushService
 import dev.zacx.muster.shell.ShellCookies
+import dev.zacx.muster.shell.ShellRestore
 import dev.zacx.muster.shell.ShellSnapshot
 import dev.zacx.muster.shell.SnapshotOverlay
 import dev.zacx.muster.shell.SnapshotPolicy
@@ -62,6 +66,7 @@ import dev.zacx.muster.ui.PhoneSettingsScreen
 import dev.zacx.muster.ui.ServerUrlScreen
 import dev.zacx.muster.ui.ServersScreen
 import dev.zacx.muster.ui.StatusBanner
+import dev.zacx.muster.ui.SystemBars
 import dev.zacx.muster.ui.TenantBar
 import java.time.Instant
 import kotlinx.coroutines.Dispatchers
@@ -143,11 +148,52 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         StartupProbe.mark("activity.onCreate")
-        enableEdgeToEdge()
+        // Edge to edge from the first frame; each screen then sets the icons
+        // for its own background (SystemBars).
+        barsOver(SHELL_BACKGROUND)
         super.onCreate(savedInstanceState)
         onBackPressedDispatcher.addCallback(this, back)
         onBackPressedDispatcher.addCallback(this, screenBack)
-        lifecycleScope.launch { route(intent) }
+        // Re-created with the shell up (a change the manifest does not declare,
+        // or process death): back to the page it showed (ShellRestore).
+        val restored = ShellRestore.intent(savedInstanceState)
+        lifecycleScope.launch { route(restored ?: intent) }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        val t = shownTenant
+        val p = policy
+        if (t != null && p != null && webView != null) ShellRestore.save(outState, t, p.allowedOriginRule, webView?.url)
+    }
+
+    /** The colour behind the system bars now: what [onConfigurationChanged] re-applies. */
+    private var barsBackground = SHELL_BACKGROUND
+
+    private fun barsOver(background: Int) {
+        barsBackground = background
+        SystemBars.applyOver(this, background)
+    }
+
+    /** A native screen's Material surface is what shows behind the system bars. */
+    @Composable
+    private fun NativeSystemBars() {
+        val surface = MaterialTheme.colorScheme.surface.toArgb()
+        SideEffect { barsOver(surface) }
+    }
+
+    /**
+     * A change the manifest declares (configChanges) keeps this activity, but
+     * not the window's bar appearance: measured on an API 36 emulator, the
+     * appearance set here still reads LIGHT_STATUS_BARS|LIGHT_NAVIGATION_BARS
+     * when this returns and is 0 (white icons) by the next message on the
+     * main thread (what clears it is not established), so a dark-mode toggle
+     * or a rotation left white icons on a light native screen. The current
+     * screen's icons go back on once the change has been dispatched.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        window.decorView.post { SystemBars.applyOver(this, barsBackground) }
     }
 
     override fun onResume() {
@@ -212,6 +258,7 @@ class MainActivity : ComponentActivity() {
         screenBack.isEnabled = adding
         setContent {
             MaterialTheme {
+                NativeSystemBars()
                 ServerUrlScreen(adding = adding, onCancel = if (adding) ({ lifecycleScope.launch { route(Intent()) } }) else null) { url ->
                     val p = OriginPolicy.forServer(url.trim()) ?: return@ServerUrlScreen getString(R.string.url_invalid)
                     lifecycleScope.launch {
@@ -326,6 +373,8 @@ class MainActivity : ComponentActivity() {
         }
         ShellWebView.padForInsets(root)
         setContentView(root)
+        // The container's background is what shows behind both bars (its inset padding).
+        barsOver(SHELL_BACKGROUND)
         val attach = {
             // A newer shell (or none) replaced this one before it got its WebView.
             if (shell == shellGeneration && policy === p) attachWebView(page, p, target, t, byRefresh)
@@ -633,6 +682,7 @@ class MainActivity : ComponentActivity() {
         screenBack.isEnabled = true // back: the shell (or, with no server left, the first-run screen)
         setContent {
             MaterialTheme {
+                NativeSystemBars()
                 val tenants by app.tenants.tenants.collectAsState(initial = null)
                 val brands by remember { app.shownBrands() }.collectAsState(initial = emptyMap())
                 var open by remember { mutableStateOf(detail) }
