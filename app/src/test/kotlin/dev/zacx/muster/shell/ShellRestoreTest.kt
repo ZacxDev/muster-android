@@ -54,7 +54,15 @@ class ShellRestoreTest {
     @Test
     fun theTasksPageComesBackOnTasks() {
         assertEquals("$origin/tasks", loads(roundTrip(a.id, "$origin/tasks")))
-        assertEquals("$origin/tasks/2?tab=log#c3", loads(roundTrip(a.id, "$origin/tasks/2?tab=log#c3")))
+    }
+
+    /** Only the path comes back: a one-time ?code=/?token= URL, or a state-changing GET, is never fetched again. */
+    @Test
+    fun theQueryAndFragmentAreNotRestored() {
+        assertEquals("$origin/tasks/2", loads(roundTrip(a.id, "$origin/tasks/2?tab=log#c3")))
+        assertEquals("$origin/devices", loads(roundTrip(a.id, "$origin/devices?code=ABCD-1234")))
+        assertEquals("$origin/tasks", loads(roundTrip(a.id, "$origin/tasks#c3?token=x")))
+        assertEquals("$origin/", loads(roundTrip(a.id, "$origin/?token=x")))
     }
 
     @Test

@@ -29,8 +29,6 @@ class ConfigChangesManifestTest {
             "smallestScreenSize" to ActivityInfo.CONFIG_SMALLEST_SCREEN_SIZE,
             "screenLayout" to ActivityInfo.CONFIG_SCREEN_LAYOUT,
             "density" to ActivityInfo.CONFIG_DENSITY,
-            "fontScale" to ActivityInfo.CONFIG_FONT_SCALE,
-            "fontWeightAdjustment" to ActivityInfo.CONFIG_FONT_WEIGHT_ADJUSTMENT,
             "uiMode" to ActivityInfo.CONFIG_UI_MODE,
             "keyboard" to ActivityInfo.CONFIG_KEYBOARD,
             "keyboardHidden" to ActivityInfo.CONFIG_KEYBOARD_HIDDEN,

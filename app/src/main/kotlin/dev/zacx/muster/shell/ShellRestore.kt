@@ -10,13 +10,13 @@ import dev.zacx.muster.core.model.MusterPath
  * The shell's page across an activity re-creation the shell does not handle
  * itself, and across process death.
  *
- * The common configuration changes (rotation, window size, density, font
- * size, dark mode, keyboard) never re-create the activity: the manifest
- * declares them, so the live WebView keeps its page, scroll and connections.
- * Any other change, and a process the system killed in the background, comes
- * back through onCreate with the saved state: this puts the shell back on the
- * tenant and page it was showing, instead of the launch intent's page (the
- * home page, or an old notification's path).
+ * The common configuration changes (rotation, window size, density, dark
+ * mode, keyboard) never re-create the activity: the manifest declares them,
+ * so the live WebView keeps its page, scroll and connections. Any other
+ * change (font size among them), and a process the system killed in the
+ * background, come back through onCreate with the saved state: this puts the
+ * shell back on the tenant and page it was showing, instead of the launch
+ * intent's page (the home page, or an old notification's path).
  *
  * Only a path on the tenant's own origin is kept, and the restored intent goes
  * through the same checks as a notification tap (MusterPath, TapRouting,
@@ -41,10 +41,15 @@ object ShellRestore {
             .putExtra(MainActivity.EXTRA_PATH, MusterPath.parse(saved.getString(KEY_PATH)))
     }
 
-    /** [url]'s path (with query and fragment) when it is on [origin] exactly; null otherwise, and for the home page. */
+    /**
+     * [url]'s path when it is on [origin] exactly; null otherwise, and for the
+     * home page. The query and fragment are dropped: a one-time `?code=` or
+     * `?token=` URL, or a GET that changes state, must not be fetched again
+     * when the shell comes back after process death.
+     */
     fun pathOn(origin: String, url: String?): String? {
         if (url == null || !url.startsWith("$origin/")) return null
-        val path = url.substring(origin.length)
+        val path = url.substring(origin.length).takeWhile { it != '?' && it != '#' }
         return if (path == "/") null else MusterPath.parse(path)
     }
 }
