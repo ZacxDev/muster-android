@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.Rect
 import android.net.Uri
@@ -149,7 +150,7 @@ class MainActivity : ComponentActivity() {
         StartupProbe.mark("activity.onCreate")
         // Edge to edge from the first frame; each screen then sets the icons
         // for its own background (SystemBars).
-        SystemBars.applyOver(this, SHELL_BACKGROUND)
+        barsOver(SHELL_BACKGROUND)
         super.onCreate(savedInstanceState)
         onBackPressedDispatcher.addCallback(this, back)
         onBackPressedDispatcher.addCallback(this, screenBack)
@@ -166,11 +167,33 @@ class MainActivity : ComponentActivity() {
         if (t != null && p != null && webView != null) ShellRestore.save(outState, t, p.allowedOriginRule, webView?.url)
     }
 
+    /** The colour behind the system bars now: what [onConfigurationChanged] re-applies. */
+    private var barsBackground = SHELL_BACKGROUND
+
+    private fun barsOver(background: Int) {
+        barsBackground = background
+        SystemBars.applyOver(this, background)
+    }
+
     /** A native screen's Material surface is what shows behind the system bars. */
     @Composable
     private fun NativeSystemBars() {
         val surface = MaterialTheme.colorScheme.surface.toArgb()
-        SideEffect { SystemBars.applyOver(this, surface) }
+        SideEffect { barsOver(surface) }
+    }
+
+    /**
+     * A change the manifest declares (configChanges) keeps this activity, but
+     * not the window's bar appearance: measured on an API 36 emulator, the
+     * appearance set here still reads LIGHT_STATUS_BARS|LIGHT_NAVIGATION_BARS
+     * when this returns and is 0 (white icons) by the next message on the
+     * main thread (what clears it is not established), so a dark-mode toggle
+     * or a rotation left white icons on a light native screen. The current
+     * screen's icons go back on once the change has been dispatched.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        window.decorView.post { SystemBars.applyOver(this, barsBackground) }
     }
 
     override fun onResume() {
@@ -351,7 +374,7 @@ class MainActivity : ComponentActivity() {
         ShellWebView.padForInsets(root)
         setContentView(root)
         // The container's background is what shows behind both bars (its inset padding).
-        SystemBars.applyOver(this, SHELL_BACKGROUND)
+        barsOver(SHELL_BACKGROUND)
         val attach = {
             // A newer shell (or none) replaced this one before it got its WebView.
             if (shell == shellGeneration && policy === p) attachWebView(page, p, target, t, byRefresh)
