@@ -120,7 +120,12 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   the exact answer, signing `muster-device-action-v1` / nonce / action / ask
   id / the answer's sha256 with the step-up key (a strong biometric, or the
   PIN for a biometric-or-PIN key). Nothing is sent without that confirmation.
-  The app builds the signed message itself and refuses a challenge whose
+  A **step-up confirmation card** (muster's Confirm / Refuse card for a
+  decision a machine's session asked to make as you) is decided this way with
+  one tap: its challenge carries the card's own text (`confirms`), and the
+  prompt's title names the answer (`Answer "Confirm" to this request?`) and
+  its description is that text, cut to 1,000 characters with a visible marker.
+  The text is shown, never signed. The app builds the signed message itself and refuses a challenge whose
   message differs. A refusal (an expired challenge, a 4xx, no network) is
   written into the notification, buttons kept so the user can tap again; a
   question already answered or gone loses its buttons and says so; a sent one

@@ -7,6 +7,7 @@ import androidx.test.core.app.ApplicationProvider
 import dev.zacx.muster.core.model.ActionId
 import dev.zacx.muster.core.model.AskAction
 import dev.zacx.muster.core.net.AskRequest
+import dev.zacx.muster.core.net.SignedAsk
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -87,5 +88,48 @@ class StepUpIntentTest {
         assertEquals("Send this answer?", StepUpActivity.promptTitle(AskRequest(ActionId.ASK_ANSWER, "41", "  ship it ")))
         assertEquals("  ship it ", StepUpActivity.promptDescription(AskRequest(ActionId.ASK_ANSWER, "41", "  ship it ")))
         assertEquals("Dismiss this question?", StepUpActivity.promptTitle(AskRequest(ActionId.ASK_DISMISS, "41", null)))
+    }
+
+    private val card = "A session on ws-1 (main:1) asks to answer one of your open asks as you: attention_answer {\"id\":9,\"answer\":\"yes\"}"
+    private val ready = SignedAsk.Prepared.Ready("mdc_x", byteArrayOf(1), card)
+
+    /**
+     * 🔴 A STEP-UP CARD'S PROMPT SHOWS WHAT IT CONFIRMS (muster
+     * docs/mirroring.md, "Confirming a card from its notification"): the
+     * prompt built from muster's challenge names the exact answer in its
+     * title and carries the card's text, as muster sent it, as its
+     * description. Without the challenge's text it is the plain ask's prompt.
+     */
+    @Test
+    fun aStepUpCardsPromptShowsWhatItConfirms() {
+        val tap = StepUpActivity.Tap("t1", "attention-ask-41", "step-up is asking", null, AskRequest(ActionId.ASK_ANSWER, "41", "Confirm"))
+        val info = StepUpActivity.promptInfo(tap, ready, keyTakesPin = false, cancel = "Cancel")
+        assertEquals("Answer \"Confirm\" to this request?", info.title)
+        assertEquals(card, info.description)
+        assertEquals("step-up is asking", info.subtitle)
+        assertTrue(info.isConfirmationRequired)
+
+        val refuse = tap.copy(request = AskRequest(ActionId.ASK_ANSWER, "41", "Refuse"))
+        assertEquals("Answer \"Refuse\" to this request?", StepUpActivity.promptInfo(refuse, ready, false, "Cancel").title)
+        val dismiss = tap.copy(request = AskRequest(ActionId.ASK_DISMISS, "41", null))
+        assertEquals("Dismiss this request?", StepUpActivity.promptInfo(dismiss, ready, false, "Cancel").title)
+        assertEquals(card, StepUpActivity.promptInfo(dismiss, ready, false, "Cancel").description)
+
+        // Control: the same tap with no card text from muster is the plain ask's prompt.
+        val plain = StepUpActivity.promptInfo(tap, ready.copy(confirms = null), false, "Cancel")
+        assertEquals("Send this answer?", plain.title)
+        assertEquals("Confirm", plain.description)
+    }
+
+    /** A long card is cut to 1,000 characters with a visible marker, never inside a surrogate pair. */
+    @Test
+    fun aLongCardIsCutVisibly() {
+        val r = AskRequest(ActionId.ASK_ANSWER, "41", "Confirm")
+        val exact = "a".repeat(1000)
+        assertEquals(exact, StepUpActivity.promptDescription(r, exact))
+        val long = "b".repeat(999) + "👍" + "c".repeat(50)
+        val cut = StepUpActivity.promptDescription(r, long)
+        assertEquals("b".repeat(999) + "👍" + StepUpActivity.CARD_CUT, cut)
+        assertTrue(StepUpActivity.CARD_CUT.startsWith("…"))
     }
 }

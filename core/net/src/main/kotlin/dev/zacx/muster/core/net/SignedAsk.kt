@@ -24,8 +24,13 @@ data class AskRequest(val action: ActionId, val target: String, val answer: Stri
 class SignedAsk(private val api: DeviceApi, private val token: String) {
 
     sealed interface Prepared {
-        /** [message] is the exact bytes to sign, built by the app (never taken from muster's answer). */
-        data class Ready(val nonce: String, val message: ByteArray) : Prepared
+        /**
+         * [message] is the exact bytes to sign, built by the app (never taken
+         * from muster's answer). [confirms] is muster's text for a step-up
+         * confirmation card (the challenge's `confirms`), null for any other
+         * ask: what the prompt shows, never part of what is signed.
+         */
+        data class Ready(val nonce: String, val message: ByteArray, val confirms: String? = null) : Prepared
 
         data class Refused(val outcome: AskOutcome) : Prepared
     }
@@ -40,7 +45,7 @@ class SignedAsk(private val api: DeviceApi, private val token: String) {
                 // muster rebuilds the message from its stored challenge; a
                 // different one here means the two disagree on what is signed.
                 if (c.message != ours) return Prepared.Refused(AskOutcome.Failed(BUG))
-                Prepared.Ready(c.nonce, ours.toByteArray(Charsets.UTF_8))
+                Prepared.Ready(c.nonce, ours.toByteArray(Charsets.UTF_8), c.confirms?.takeIf { it.isNotBlank() })
             }
             else -> Prepared.Refused(outcomeOf(r))
         }

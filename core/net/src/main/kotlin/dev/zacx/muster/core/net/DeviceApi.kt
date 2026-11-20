@@ -219,12 +219,19 @@ class DeviceApi(
         @SerialName("text_sha256") val textSha256: String? = null,
     )
 
-    /** A one-time challenge (single use, 2 minutes). [message] is what muster says to sign. */
+    /**
+     * A one-time challenge (single use, 2 minutes). [message] is what muster
+     * says to sign. [confirms] is present only for a step-up confirmation
+     * card (muster docs/mirroring.md, "Confirming a card from its
+     * notification"): the card's own text, which the prompt shows so the user
+     * sees what a Confirm or Refuse decides. Display only: it is never signed.
+     */
     @Serializable
     data class Challenge(
         val nonce: String,
         @SerialName("expires_in") val expiresIn: Int = 0,
         val message: String = "",
+        val confirms: String? = null,
     )
 
     /**
