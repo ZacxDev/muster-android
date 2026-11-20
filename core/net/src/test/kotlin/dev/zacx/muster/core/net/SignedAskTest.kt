@@ -148,6 +148,28 @@ class SignedAskTest {
         assertEquals(setOf("nonce", "signature"), Json.parseToJsonElement(a.body!!.utf8()).jsonObject.keys)
     }
 
+    /**
+     * A step-up confirmation card's challenge carries the card's own text
+     * (`confirms`, muster docs/design/android.md step 2): it reaches the
+     * prompt, and it is never part of what is signed. Any other ask's
+     * challenge carries none; a blank one counts as none.
+     */
+    @Test
+    fun aStepUpCardsChallengeCarriesItsTextButNotIntoTheSignature() {
+        val card = "A session on ws-1 (main:1) asks to approve or reject a reply or outbound draft as you: plugin_draft_decide {\"id\":7}"
+        val req = AskRequest(ActionId.ASK_ANSWER, "41", "ship it")
+        server.enqueue(json(200, """{"nonce":"$nonce","expires_in":120,"message":${JsonPrimitive(answerMessage)},"confirms":${JsonPrimitive(card)}}"""))
+        val ready = signed.prepare(req) as SignedAsk.Prepared.Ready
+        assertEquals(card, ready.confirms)
+        assertArrayEquals(answerMessage.toByteArray(Charsets.UTF_8), ready.message)
+
+        server.enqueue(challengeAnswer(answerMessage))
+        assertEquals(null, (signed.prepare(req) as SignedAsk.Prepared.Ready).confirms)
+
+        server.enqueue(json(200, """{"nonce":"$nonce","expires_in":120,"message":${JsonPrimitive(answerMessage)},"confirms":"  "}"""))
+        assertEquals(null, (signed.prepare(req) as SignedAsk.Prepared.Ready).confirms)
+    }
+
     /** The key signs only what the app built: a challenge whose message differs is refused unsigned. */
     @Test
     fun aChallengeForADifferentMessageIsNotSigned() {

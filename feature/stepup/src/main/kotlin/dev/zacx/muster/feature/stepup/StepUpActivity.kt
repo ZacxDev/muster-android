@@ -62,7 +62,9 @@ interface StepUpHost {
  * 2. `POST /api/device/challenge`, bound to the action, the ask and the
  *    sha256 of the exact answer ([SignedAsk.prepare]).
  * 3. BiometricPrompt over a `CryptoObject(Signature)` from the step-up key,
- *    its description the exact answer: the key's own authentication (a
+ *    its description the exact answer — for a step-up confirmation card,
+ *    the card's own text muster sent with the challenge (`confirms`), so
+ *    the user sees what a Confirm or Refuse decides: the key's own authentication (a
  *    strong biometric, or the PIN for a biometric-or-PIN key) is the
  *    confirmation, so a tapped chip is NEVER sent without it.
  * 4. The signed action ([SignedAsk.send]); the outcome goes back into the
@@ -147,20 +149,7 @@ class StepUpActivity : FragmentActivity() {
         signed: SignedAsk,
         ready: SignedAsk.Prepared.Ready,
     ) {
-        val allowed = if (pairing.keyTakesPin) {
-            Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL
-        } else {
-            Authenticators.BIOMETRIC_STRONG
-        }
-        val info = BiometricPrompt.PromptInfo.Builder()
-            .setTitle(promptTitle(tap.request))
-            .setSubtitle(tap.title)
-            .setDescription(promptDescription(tap.request))
-            .setAllowedAuthenticators(allowed)
-            .apply { if (!pairing.keyTakesPin) setNegativeButtonText(getString(R.string.stepup_cancel)) }
-            // A face unlock still asks for a tap on Confirm: never a silent send.
-            .setConfirmationRequired(true)
-            .build()
+        val info = promptInfo(tap, ready, pairing.keyTakesPin, getString(R.string.stepup_cancel))
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
                 val s = result.cryptoObject?.signature
@@ -225,12 +214,64 @@ class StepUpActivity : FragmentActivity() {
         internal const val EXTRA_TARGET = "dev.zacx.muster.stepup.TARGET"
         internal const val EXTRA_ANSWER = "dev.zacx.muster.stepup.ANSWER"
 
-        /** The prompt's title: what the tap does. */
-        fun promptTitle(r: AskRequest): String =
-            if (r.action == ActionId.ASK_DISMISS) "Dismiss this question?" else "Send this answer?"
+        /**
+         * The prompt for [tap] once muster's challenge is [ready]: its title
+         * and description ([promptTitle], [promptDescription], from the tap's
+         * exact answer and the challenge's `confirms`), the tap's notification
+         * title as subtitle, the key's authenticators, and an explicit
+         * Confirm even for a face unlock.
+         */
+        internal fun promptInfo(tap: Tap, ready: SignedAsk.Prepared.Ready, keyTakesPin: Boolean, cancel: String): BiometricPrompt.PromptInfo {
+            val allowed = if (keyTakesPin) {
+                Authenticators.BIOMETRIC_STRONG or Authenticators.DEVICE_CREDENTIAL
+            } else {
+                Authenticators.BIOMETRIC_STRONG
+            }
+            return BiometricPrompt.PromptInfo.Builder()
+                .setTitle(promptTitle(tap.request, ready.confirms))
+                .setSubtitle(tap.title)
+                .setDescription(promptDescription(tap.request, ready.confirms))
+                .setAllowedAuthenticators(allowed)
+                .apply { if (!keyTakesPin) setNegativeButtonText(cancel) }
+                // A face unlock still asks for a tap on Confirm: never a silent send.
+                .setConfirmationRequired(true)
+                .build()
+        }
 
-        /** The prompt's description: the EXACT answer text (the hash binding means something only if the user sees it). */
-        fun promptDescription(r: AskRequest): String = r.answer ?: "Dismiss without answering."
+        /**
+         * The prompt's title: what the tap does. For a step-up confirmation
+         * card ([confirms], muster's text for it from the challenge) it names
+         * the exact answer and that it decides a request:
+         * `Answer "Confirm" to this request?`.
+         */
+        fun promptTitle(r: AskRequest, confirms: String? = null): String = when {
+            confirms != null && r.action == ActionId.ASK_DISMISS -> "Dismiss this request?"
+            confirms != null -> "Answer \"${r.answer}\" to this request?"
+            r.action == ActionId.ASK_DISMISS -> "Dismiss this question?"
+            else -> "Send this answer?"
+        }
+
+        /**
+         * The prompt's description: the EXACT answer text (the hash binding
+         * means something only if the user sees it). For a step-up
+         * confirmation card, WHAT the answer decides: the card's own text as
+         * muster handed it with the challenge (the title names the answer),
+         * cut to [MAX_CARD] characters with a visible marker ([CARD_CUT]).
+         */
+        fun promptDescription(r: AskRequest, confirms: String? = null): String =
+            confirms?.let { cutCard(it) } ?: r.answer ?: "Dismiss without answering."
+
+        /** The most of a card's text the prompt shows (muster docs/mirroring.md says so). */
+        const val MAX_CARD = 1000
+
+        /** Follows a card's text the prompt cut. */
+        const val CARD_CUT = "…\n\nThe rest is on the card in muster: refuse, or open it, if you have not read it."
+
+        /** [s] cut to at most [MAX_CARD] code points, never inside a surrogate pair, marked when cut. */
+        internal fun cutCard(s: String): String {
+            if (s.codePointCount(0, s.length) <= MAX_CARD) return s
+            return s.substring(0, s.offsetByCodePoints(0, MAX_CARD)) + CARD_CUT
+        }
 
         /**
          * Button [index] of tenant [tenant]'s notification under [tag]:
