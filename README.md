@@ -54,9 +54,24 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   cannot tell which), a dialog says the microphone isn't allowed and offers
   the app's settings page instead of a silent refusal.
 - **The bridge:** `musterApp`, a `WebViewCompat.addWebMessageListener`
-  restricted to the exact origin, main frame only. It understands the two
-  messages muster sends, `pair` and `open-notification-settings`, and
-  `touch-start`, which the app's own pull-to-refresh script sends (below).
+  restricted to the exact origin, main frame only. It understands the
+  messages muster sends, `pair`, `open-notification-settings`, `back-claim`
+  and `open-external`, and `touch-start`, which the app's own pull-to-refresh
+  script sends (below). `open-external`
+  (`{"type":"open-external","url":"https://<muster host>/apps/7"}`) opens a
+  server app's page in the system browser with `ACTION_VIEW`, never in the
+  WebView, and only for muster's exact origin and the path `/apps/<digits>`,
+  with at most one query, `?ref=<ref>` (`[A-Za-z0-9_-]{1,64}`, checked raw):
+  no other query, no fragment, user info, port other than the origin's,
+  encoded character or dot segment. Anything else is refused and logged, and nothing opens.
+  It opens only within 2 s of a `touch-start` (a real touch on the page), at
+  most once per 2 s, and never when this app is itself among the link's handlers.
+- **Which messages the app understands:** a document-start script (the exact
+  origin, main frame only) defines `window.musterAppMessages`, a frozen
+  array of the message types above. muster's page detects a message with
+  `window.musterApp && Array.isArray(window.musterAppMessages) &&
+  window.musterAppMessages.indexOf('open-external') !== -1`, never with an
+  app version. An older app has no list, which reads as "not supported".
 - **Pull to refresh:** pulling down at the top of a page reloads it, with a
   spinner in muster's colours until the page finishes (15 s at most). A pull
   refreshes only when nothing under the finger can still scroll up. The

@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.PixelCopy
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -47,6 +48,7 @@ import dev.zacx.muster.core.model.MusterPath
 import dev.zacx.muster.feature.notify.Channels
 import dev.zacx.muster.feature.push.PushRegistrar
 import dev.zacx.muster.feature.shell.BridgeMessage
+import dev.zacx.muster.feature.shell.ExternalAppOpener
 import dev.zacx.muster.feature.shell.MicrophoneAccess
 import dev.zacx.muster.feature.shell.OriginPolicy
 import dev.zacx.muster.feature.shell.ShellBack
@@ -136,6 +138,9 @@ class MainActivity : ComponentActivity() {
 
     /** RECORD_AUDIO for the page's dictation mic; registered before STARTED. */
     private val mic = MicrophoneAccess.register(this)
+
+    /** `open-external` only right after a touch, at most once per 2 s. */
+    private val externalOpener = ExternalAppOpener(this)
 
     private fun answerFiles(uris: List<Uri>?) {
         val d = pendingFiles
@@ -435,9 +440,18 @@ class MainActivity : ComponentActivity() {
                 when (message) {
                     is BridgeMessage.Pair -> confirmPairing(p.allowedOriginRule, message.code, message.expiresAt)
                     BridgeMessage.OpenNotificationSettings -> openNotificationSettings()
-                    is BridgeMessage.TouchStart -> webView?.let(ShellRefreshLayout::of)?.onProbe(message)
+                    is BridgeMessage.TouchStart -> {
+                        externalOpener.onTouchStart()
+                        webView?.let(ShellRefreshLayout::of)?.onProbe(message)
+                    }
                     is BridgeMessage.BackClaim -> back.claim(message.open)
-                    is BridgeMessage.Refused -> Unit
+                    // muster's own /apps/<id>, in the system browser, never in this WebView;
+                    // only right after a touch, and at most once per 2 s (ExternalAppOpener).
+                    is BridgeMessage.OpenExternal -> externalOpener.onOpenExternal(message).let {
+                        if (it != ExternalAppOpener.Outcome.OPENED) Log.w(TAG, "open-external not opened: $it")
+                    }
+                    // Refused silently; the reason is a fixed string, never the message's content.
+                    is BridgeMessage.Refused -> Log.w(TAG, "bridge message refused: ${message.reason}")
                 }
             }
         }
@@ -771,6 +785,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val TAG = "MusterShell"
         const val ACTION_SETTINGS = "dev.zacx.muster.SETTINGS"
         const val EXTRA_PATH = "path"
 

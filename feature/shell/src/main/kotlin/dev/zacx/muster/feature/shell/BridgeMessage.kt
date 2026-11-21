@@ -14,15 +14,19 @@ import java.time.format.DateTimeParseException
  * "The shell"). Each is a JSON string. The bridge never carries a credential
  * from the app to the page.
  *
- * The app understands the three messages muster's pages send:
+ * The app understands the four messages muster's pages send:
  *
  *     {"type":"pair","code":"mdp_…","expires_at":"2026-10-21T12:00:00Z"}
  *     {"type":"open-notification-settings"}
  *     {"type":"back-claim","open":true}
+ *     {"type":"open-external","url":"https://<muster host>/apps/7"}
  *
- * (the last when muster's switcher dock opens, `"open":false` when it closes;
- * `open` is a JSON boolean or the message is refused; muster
- * docs/design/switcher-dock.md, "The shell change")
+ * (`back-claim` when muster's switcher dock opens, `"open":false` when it
+ * closes; `open` is a JSON boolean or the message is refused; muster
+ * docs/design/switcher-dock.md, "The shell change". `open-external` opens a
+ * server app's page in the system browser, and only muster's own
+ * `/apps/<digits>`, optionally with `?ref=<ref>` ([ExternalAppPage]); muster docs/design/meetings.md, "The
+ * Android path for a server app")
  *
  * and one the app's own document-start script sends from muster's pages
  * (PullProbeScript; scroll geometry, which gesture it is, and whether text
@@ -30,7 +34,10 @@ import java.time.format.DateTimeParseException
  *
  *     {"type":"touch-start","doc":"k3x9q2","seq":3,"doc_top":0,"inner_top":null,"owner":"page","editing":false}
  *
- * Everything else is refused. The design also names "request
+ * Everything else is refused. Which types the app understands is advertised
+ * to muster's page as `window.musterAppMessages` ([AppMessagesScript], from
+ * [TYPES]), so the page can tell an app that has a message from one too old
+ * for it. The design also names "request
  * POST_NOTIFICATIONS" and "theme"; muster sends neither yet, and the app asks
  * for POST_NOTIFICATIONS itself right after pairing.
  */
@@ -52,11 +59,27 @@ sealed interface BridgeMessage {
      */
     data class BackClaim(val open: Boolean) : BridgeMessage
 
+    /** Open [url], muster's own `/apps/<id>` as [ExternalAppPage.accept] rebuilt it, in the system browser. */
+    data class OpenExternal(val url: String) : BridgeMessage
+
     data class Refused(val reason: String) : BridgeMessage
 
     companion object {
         /** Messages are tiny; anything larger is not one of muster's. */
         const val MAX_LEN = 1024
+
+        /**
+         * Every message type [parse] understands, in one place: the parser's
+         * branches and the list advertised to the page ([AppMessagesScript])
+         * are both this set (AppMessagesScriptTest.everyAdvertisedTypeIsOneTheParserUnderstands pins the two together).
+         */
+        val TYPES: List<String> = listOf(
+            "pair",
+            "open-notification-settings",
+            "back-claim",
+            PullProbeScript.MESSAGE_TYPE,
+            ExternalAppPage.MESSAGE_TYPE,
+        )
 
         private val json = Json { isLenient = false }
 
@@ -96,6 +119,11 @@ sealed interface BridgeMessage {
                     else -> Refused("back-claim without a boolean open")
                 }
                 PullProbeScript.MESSAGE_TYPE -> touchStart(obj)
+                ExternalAppPage.MESSAGE_TYPE -> {
+                    val url = s("url") ?: return Refused("open-external without a url")
+                    ExternalAppPage.accept(url, policy)?.let(::OpenExternal)
+                        ?: Refused("open-external with a url that is not a muster app page")
+                }
                 else -> Refused("unknown message")
             }
         }
