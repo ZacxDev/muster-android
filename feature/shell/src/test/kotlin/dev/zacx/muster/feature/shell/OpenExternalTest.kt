@@ -3,6 +3,7 @@ package dev.zacx.muster.feature.shell
 import android.content.ComponentName
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.ComponentActivity
 import org.junit.Assert.assertEquals
@@ -123,6 +124,34 @@ class OpenExternalTest {
         val self = ComponentName(activity.packageName, "dev.zacx.muster.LinkActivity")
         pm.addActivityIfNotPresent(self)
         pm.addIntentFilterForActivity(self, filter)
+        assertFalse(deliver(parse(msg("https://m.example.test/apps/7"))))
+        assertNull(shadowOf(activity).nextStartedActivity)
+    }
+
+    /**
+     * 🔴 The chooser case: a browser AND this app both handle the link and
+     * this app is not what default resolution returns. On a device with no
+     * default that is the system chooser (package `android`), which then
+     * offers this app. Robolectric has no chooser and always resolves to this
+     * app first, so the browser's higher filter priority stands in: default
+     * resolution answers the browser while this app is still a handler.
+     */
+    @Test
+    fun anIntentThisAppIsAmongTheHandlersOfIsNotStarted() {
+        val pm = shadowOf(activity.packageManager)
+        val filter = IntentFilter(Intent.ACTION_VIEW).apply {
+            addCategory(Intent.CATEGORY_BROWSABLE); addCategory(Intent.CATEGORY_DEFAULT); addDataScheme("https")
+        }
+        val browser = ComponentName("org.example.browser", "org.example.browser.Main")
+        val self = ComponentName(activity.packageName, "dev.zacx.muster.LinkActivity")
+        pm.addActivityIfNotPresent(browser)
+        pm.addIntentFilterForActivity(browser, IntentFilter(filter).apply { priority = 10 })
+        pm.addActivityIfNotPresent(self)
+        pm.addIntentFilterForActivity(self, filter)
+        val intent = ExternalAppPage.viewIntent("https://m.example.test/apps/7")
+        // The fixture is the case: default resolution is NOT this app, and this app IS a handler.
+        assertEquals("org.example.browser", activity.packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName)
+        assertTrue(activity.packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY).any { it.activityInfo.packageName == activity.packageName })
         assertFalse(deliver(parse(msg("https://m.example.test/apps/7"))))
         assertNull(shadowOf(activity).nextStartedActivity)
     }

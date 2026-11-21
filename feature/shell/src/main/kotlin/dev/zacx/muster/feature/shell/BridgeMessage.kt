@@ -71,7 +71,7 @@ sealed interface BridgeMessage {
         /**
          * Every message type [parse] understands, in one place: the parser's
          * branches and the list advertised to the page ([AppMessagesScript])
-         * are both this set (BridgeMessagesAdvertisedTest pins the two together).
+         * are both this set (AppMessagesScriptTest.everyAdvertisedTypeIsOneTheParserUnderstands pins the two together).
          */
         val TYPES: List<String> = listOf(
             "pair",

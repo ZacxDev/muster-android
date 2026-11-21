@@ -64,6 +64,8 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   with at most one query, `?ref=<ref>` (`[A-Za-z0-9_-]{1,64}`, checked raw):
   no other query, no fragment, user info, port other than the origin's,
   encoded character or dot segment. Anything else is refused and logged, and nothing opens.
+  It opens only within 2 s of a `touch-start` (a real touch on the page), at
+  most once per 2 s, and never when this app is itself among the link's handlers.
 - **Which messages the app understands:** a document-start script (the exact
   origin, main frame only) defines `window.musterAppMessages`, a frozen
   array of the message types above. muster's page detects a message with

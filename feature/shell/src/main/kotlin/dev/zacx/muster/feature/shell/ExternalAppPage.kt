@@ -84,15 +84,21 @@ object ExternalAppPage {
 
     /**
      * Opens [message]'s URL with `ACTION_VIEW`; false when nothing was
-     * started. Refuses an intent that would resolve to this app itself, so a
-     * future link filter can never bring the page back into the WebView (the
-     * loop the design names). It takes the parsed message, not a string, so
-     * only a URL that passed [accept] can reach it.
+     * started. Refuses when this app is among the activities the intent could
+     * start (`MATCH_DEFAULT_ONLY`: an implicit start, chooser included, only
+     * ever picks a `CATEGORY_DEFAULT` activity), not only when it is the
+     * default: with no default Android shows a chooser that would offer this
+     * app, and a future link filter
+     * must never bring the page back into the WebView (the loop the design
+     * names). Package visibility does not hide an app from itself. It takes
+     * the parsed message, not a string, so only a URL that passed [accept]
+     * can reach it.
      */
     fun open(context: Context, message: BridgeMessage.OpenExternal): Boolean {
         val intent = viewIntent(message.url)
-        val target = context.packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)
-        if (target?.activityInfo?.packageName == context.packageName) return false
+        @Suppress("DEPRECATION") // the int-flags overload is the one minSdk 30 has
+        val handlers = context.packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY)
+        if (handlers.any { it.activityInfo?.packageName == context.packageName }) return false
         return try {
             context.startActivity(intent)
             true
