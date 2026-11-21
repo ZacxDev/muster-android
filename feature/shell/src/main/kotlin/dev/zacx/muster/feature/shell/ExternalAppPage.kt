@@ -26,6 +26,14 @@ object ExternalAppPage {
     private val PATH = Regex("/apps/[1-9][0-9]{0,17}")
 
     /**
+     * The one query allowed: `ref=<ref>`, muster's ref rule
+     * (`^[A-Za-z0-9_-]{1,64}$`, the plugin's own id for what a knock is about;
+     * muster docs/design/meetings.md, "Core seam: knock notification"),
+     * matched against the RAW query, so an encoded ref is refused.
+     */
+    private val QUERY = Regex("ref=[A-Za-z0-9_-]{1,64}")
+
+    /**
      * The URL to open, or null. Accepted only when [url] is, as written:
      *
      * - an absolute `https` URL that java.net.URI reads strictly (no lenient
@@ -35,13 +43,17 @@ object ExternalAppPage {
      *   from the URL (host lower-cased, a default port dropped) must equal the
      *   policy's origin string, so a trailing-dot host, a look-alike or another
      *   port is refused; no user info;
-     * - with a RAW path (never decoded) of exactly `/apps/<digits>`: no query,
-     *   no fragment (not even an empty `?` or `#`), no trailing slash, no dot
-     *   segment, and an encoded slash, dot or digit (`%2F`, `%2E`, `%37`) is
-     *   refused rather than decoded, so the path checked is the path sent.
+     * - with a RAW path (never decoded) of exactly `/apps/<digits>`: no
+     *   trailing slash, no dot segment, and an encoded slash, dot or digit
+     *   (`%2F`, `%2E`, `%37`) is refused rather than decoded, so the path
+     *   checked is the path sent;
+     * - with no query, or a RAW query of exactly `ref=<ref>` ([QUERY]): an
+     *   empty `?` or `ref=`, an encoded ref, `&`, a second or repeated
+     *   parameter and any other key (`REF` included) are refused;
+     * - with no fragment, not even an empty `#`.
      *
-     * The result is rebuilt from the policy's origin and the checked path,
-     * never the input string, so a variant that passed (an upper-case host, an
+     * The result is rebuilt from the policy's origin, the checked path and the
+     * checked query, never the input string, so a variant that passed (an upper-case host, an
      * explicit default port) opens the canonical URL.
      */
     fun accept(url: String, policy: OriginPolicy): String? {
@@ -50,7 +62,9 @@ object ExternalAppPage {
         if (!u.scheme.equals("https", ignoreCase = true)) return null
         val authority = u.rawAuthority ?: return null
         if ('@' in authority || u.rawUserInfo != null) return null
-        if (u.rawQuery != null || u.rawFragment != null) return null
+        if (u.rawFragment != null) return null
+        val query = u.rawQuery
+        if (query != null && !QUERY.matches(query)) return null
         val host = u.host?.lowercase() ?: return null
         if (host.isEmpty()) return null
         val port = when (u.port) {
@@ -61,7 +75,7 @@ object ExternalAppPage {
         if ("https://$host$port" != policy.allowedOriginRule) return null
         val path = u.rawPath ?: return null
         if (!PATH.matches(path)) return null
-        return policy.allowedOriginRule + path
+        return policy.allowedOriginRule + path + (query?.let { "?$it" } ?: "")
     }
 
     /** The intent that opens [url] in the system browser. */

@@ -59,6 +59,14 @@ class OpenExternalTest {
         assertNull(shadowOf(activity).nextStartedActivity)
     }
 
+    /** A knock tap's page (`/apps/<id>?ref=<ref>`) opens with its ref. */
+    @Test
+    fun aValidRefMessageStartsOneActionViewCarryingTheRef() {
+        assertTrue(deliver(parse(msg("https://m.example.test/apps/40213?ref=Kn_0-c"))))
+        assertEquals(Uri.parse("https://m.example.test/apps/40213?ref=Kn_0-c"), shadowOf(activity).nextStartedActivity.data)
+        assertNull(shadowOf(activity).nextStartedActivity)
+    }
+
     @Test
     fun anInvalidMessageStartsNothing() {
         val bad = listOf(
@@ -68,7 +76,10 @@ class OpenExternalTest {
             msg("https://m.example.test:8443/apps/7"),
             msg("https://u@m.example.test/apps/7"),
             msg("https://m.example.test/apps/1/../x"),
-            msg("https://m.example.test/apps/7?ref=abc"),
+            msg("https://m.example.test/apps/7?ref=a&x=1"),
+            msg("https://m.example.test/apps/7?REF=a"),
+            msg("https://m.example.test/apps/7?ref=a#b"),
+            msg("https://m.example.test/apps/7?ref=%61"),
             msg("https://m.example.test/apps/abc"),
             msg("https://m.example.test/apps%2F7"),
             msg("https://m.example.test/attention"),

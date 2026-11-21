@@ -25,7 +25,7 @@ import java.time.format.DateTimeParseException
  * closes; `open` is a JSON boolean or the message is refused; muster
  * docs/design/switcher-dock.md, "The shell change". `open-external` opens a
  * server app's page in the system browser, and only muster's own
- * `/apps/<digits>` ([ExternalAppPage]); muster docs/design/meetings.md, "The
+ * `/apps/<digits>`, optionally with `?ref=<ref>` ([ExternalAppPage]); muster docs/design/meetings.md, "The
  * Android path for a server app")
  *
  * and one the app's own document-start script sends from muster's pages

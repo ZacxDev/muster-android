@@ -60,9 +60,10 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   script sends (below). `open-external`
   (`{"type":"open-external","url":"https://<muster host>/apps/7"}`) opens a
   server app's page in the system browser with `ACTION_VIEW`, never in the
-  WebView, and only for muster's exact origin and the path `/apps/<digits>`:
-  no query, fragment, user info, port other than the origin's, encoded
-  character or dot segment. Anything else is refused and logged, and nothing opens.
+  WebView, and only for muster's exact origin and the path `/apps/<digits>`,
+  with at most one query, `?ref=<ref>` (`[A-Za-z0-9_-]{1,64}`, checked raw):
+  no other query, no fragment, user info, port other than the origin's,
+  encoded character or dot segment. Anything else is refused and logged, and nothing opens.
 - **Which messages the app understands:** a document-start script (the exact
   origin, main frame only) defines `window.musterAppMessages`, a frozen
   array of the message types above. muster's page detects a message with

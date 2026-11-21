@@ -97,10 +97,58 @@ class ExternalAppPageTest {
         "https://m.example.test/apps/7;x",
     )
 
-    /** No query or fragment at all, not even an empty one (the design's optional `?ref=` is not accepted: PR body). */
+    /** The one query allowed: `?ref=<ref>`, muster's ref rule, and the URL opened carries it. */
     @Test
-    fun aQueryOrFragmentIsRefused() = refused(
-        "https://m.example.test/apps/7?ref=abc",
+    fun aRefQueryIsAccepted() {
+        assertEquals("https://m.example.test/apps/7?ref=abc", accept("https://m.example.test/apps/7?ref=abc"))
+        assertEquals("https://m.example.test/apps/40213?ref=x", accept("https://m.example.test/apps/40213?ref=x"))
+        assertEquals("https://m.example.test/apps/52?ref=Zq_9-k", accept("https://M.Example.TEST:443/apps/52?ref=Zq_9-k"))
+        val r64 = "Az09_-".repeat(10) + "Bq7_"
+        assertEquals(64, r64.length)
+        assertEquals("https://m.example.test/apps/7?ref=$r64", accept("https://m.example.test/apps/7?ref=$r64"))
+        assertEquals("https://m.example.test:8443/apps/31?ref=k3", accept("https://m.example.test:8443/apps/31?ref=k3", ported))
+    }
+
+    /** Anything but exactly `ref=<1..64 of [A-Za-z0-9_-]>`, checked raw, is refused. */
+    @Test
+    fun aQueryOtherThanOneRefIsRefused() {
+        val r65 = "Az09_-".repeat(10) + "Bq7_x"
+        assertEquals(65, r65.length)
+        refused(
+            "https://m.example.test/apps/7?ref=$r65",
+            "https://m.example.test/apps/7?ref=",
+            "https://m.example.test/apps/7?ref",
+            "https://m.example.test/apps/7?=abc",
+            "https://m.example.test/apps/7?ref=%61",
+            "https://m.example.test/apps/7?ref=a%2Fb",
+            "https://m.example.test/apps/7?ref=a%26x=1",
+            "https://m.example.test/apps/7?ref=a&x=1",
+            "https://m.example.test/apps/7?ref=a&",
+            "https://m.example.test/apps/7?&ref=a",
+            "https://m.example.test/apps/7?x=1&ref=a",
+            "https://m.example.test/apps/7?ref=a&ref=b",
+            "https://m.example.test/apps/7?ref=a;x=1",
+            "https://m.example.test/apps/7?REF=a",
+            "https://m.example.test/apps/7?Ref=a",
+            "https://m.example.test/apps/7?refx=a",
+            "https://m.example.test/apps/7?xref=a",
+            "https://m.example.test/apps/7?x=1",
+            "https://m.example.test/apps/7?ref==a",
+            "https://m.example.test/apps/7?ref=a=b",
+            "https://m.example.test/apps/7?ref=a.b",
+            "https://m.example.test/apps/7?ref=a+b",
+            "https://m.example.test/apps/7?ref=a/b",
+            "https://m.example.test/apps/7?ref=a?b",
+            "https://m.example.test/apps/7?ref=\u00e4",
+            "https://m.example.test/apps/7??ref=a",
+        )
+    }
+
+    /** No fragment, with or without a ref, and no empty query. */
+    @Test
+    fun aFragmentOrAnEmptyQueryIsRefused() = refused(
+        "https://m.example.test/apps/7?ref=a#b",
+        "https://m.example.test/apps/7?ref=a#",
         "https://m.example.test/apps/7?",
         "https://m.example.test/apps/7#",
         "https://m.example.test/apps/7#x",
