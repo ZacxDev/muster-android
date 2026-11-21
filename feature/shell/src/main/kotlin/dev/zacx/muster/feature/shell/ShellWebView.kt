@@ -134,6 +134,9 @@ object ShellWebView {
             }
             // Pull to refresh's probe reports through this listener: no bridge, no probe, no pull.
             PullProbeScript.install(webView, policy)
+            // The list of messages this app understands (window.musterAppMessages):
+            // only where there is a bridge to send them to.
+            AppMessagesScript.install(webView, policy)
         }
         // Without WEB_MESSAGE_LISTENER (a very old WebView) there is no bridge:
         // the page then shows no "Pair this phone" button, and nothing pairs.

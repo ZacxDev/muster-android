@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.provider.Settings
+import android.util.Log
 import android.view.PixelCopy
 import android.view.ViewGroup
 import android.webkit.WebView
@@ -47,6 +48,7 @@ import dev.zacx.muster.core.model.MusterPath
 import dev.zacx.muster.feature.notify.Channels
 import dev.zacx.muster.feature.push.PushRegistrar
 import dev.zacx.muster.feature.shell.BridgeMessage
+import dev.zacx.muster.feature.shell.ExternalAppPage
 import dev.zacx.muster.feature.shell.MicrophoneAccess
 import dev.zacx.muster.feature.shell.OriginPolicy
 import dev.zacx.muster.feature.shell.ShellBack
@@ -437,7 +439,12 @@ class MainActivity : ComponentActivity() {
                     BridgeMessage.OpenNotificationSettings -> openNotificationSettings()
                     is BridgeMessage.TouchStart -> webView?.let(ShellRefreshLayout::of)?.onProbe(message)
                     is BridgeMessage.BackClaim -> back.claim(message.open)
-                    is BridgeMessage.Refused -> Unit
+                    // muster's own /apps/<id>, in the system browser, never in this WebView.
+                    is BridgeMessage.OpenExternal -> if (!ExternalAppPage.open(this@MainActivity, message)) {
+                        Log.w(TAG, "open-external: no browser opened it")
+                    }
+                    // Refused silently; the reason is a fixed string, never the message's content.
+                    is BridgeMessage.Refused -> Log.w(TAG, "bridge message refused: ${message.reason}")
                 }
             }
         }
@@ -771,6 +778,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val TAG = "MusterShell"
         const val ACTION_SETTINGS = "dev.zacx.muster.SETTINGS"
         const val EXTRA_PATH = "path"
 
