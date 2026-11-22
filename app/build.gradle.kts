@@ -14,8 +14,8 @@ android {
         applicationId = "dev.zacx.muster"
         minSdk = 30
         targetSdk = 36
-        versionCode = 11
-        versionName = "0.4.1"
+        versionCode = 12
+        versionName = "0.4.2"
     }
 
     buildTypes {
