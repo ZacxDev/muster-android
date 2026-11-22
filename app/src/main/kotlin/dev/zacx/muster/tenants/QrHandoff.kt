@@ -10,10 +10,11 @@ import java.net.URI
  * for `https://<host>/auth/qr#mqr_<code>`; on Android the page that QR opens
  * offers an "Open in the muster app" link:
  *
- * `intent://<host>/auth/qr#Intent;scheme=https;package=dev.zacx.muster;S.dev.zacx.muster.QR_CODE=<code>;S.browser_fallback_url=…;end`
+ * `intent://<host>/auth/qr#Intent;scheme=https;package=<package>;S.<package>.QR_CODE=<code>;S.browser_fallback_url=…;end`
  *
- * which Chrome turns into a VIEW intent for `https://<host>/auth/qr`, with
- * the code as the string extra [EXTRA_CODE]. [match] decides, without any
+ * (`<package>` is the one the server is configured with) which Chrome turns
+ * into a VIEW intent for `https://<host>/auth/qr`, with the code as the
+ * string extra [extraCode] of this build's own package. [match] decides, without any
  * Android framework, whether that intent opens the page in one of this
  * phone's own servers' shell. Anything it refuses opens the app as a plain
  * launch would, with no navigation.
@@ -23,8 +24,13 @@ import java.net.URI
  * request carries.
  */
 object QrHandoff {
-    /** The string extra carrying the `mqr_…` code (the intent URI's `S.dev.zacx.muster.QR_CODE`). */
-    const val EXTRA_CODE = "dev.zacx.muster.QR_CODE"
+    /**
+     * The string extra carrying the `mqr_…` code: `<packageName>.QR_CODE`,
+     * the intent URI's `S.<package>.QR_CODE`. Read under the running build's
+     * own package (Context.packageName), so a build packaged as another id
+     * matches a server configured with that id.
+     */
+    fun extraCode(packageName: String) = "$packageName.QR_CODE"
 
     /** The only path a hand-off may name, exactly. */
     const val PATH = "/auth/qr"
@@ -54,8 +60,9 @@ object QrHandoff {
     }
 
     /**
-     * [action], [data] and [code] are the intent's action, data string and
-     * [EXTRA_CODE] extra. [fromHistory]: the intent is being redelivered from
+     * [action] and [data] are the intent's action and data string; [extra]
+     * reads one of its string extras, and the code is read from it under
+     * [extraCode] of [packageName] (the running build's). [fromHistory]: the intent is being redelivered from
      * Recents (FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY), so its code was used
      * already and is never replayed.
      *
@@ -65,13 +72,21 @@ object QrHandoff {
      * data's origin (scheme, host and port) is the origin of a server already
      * added on this phone.
      */
-    fun match(tenants: Tenants, action: String?, data: String?, code: String?, fromHistory: Boolean = false): Result {
+    fun match(
+        tenants: Tenants,
+        packageName: String,
+        action: String?,
+        data: String?,
+        extra: (String) -> String?,
+        fromHistory: Boolean = false,
+    ): Result {
         if (fromHistory || action != ACTION_VIEW || data == null) return Result.NotHandoff
         // Strict parse: a URL java.net.URI refuses is not a hand-off.
         val u = runCatching { URI(data) }.getOrNull() ?: return Result.NotHandoff
         if (!u.scheme.equals("https", ignoreCase = true)) return Result.NotHandoff
         if (u.rawUserInfo != null || u.host.isNullOrEmpty()) return Result.NotHandoff
         if (u.rawPath != PATH || u.rawQuery != null || u.rawFragment != null) return Result.NotHandoff
+        val code = extra(extraCode(packageName))
         if (code == null || code.length > MAX_CODE_LENGTH || !CODE.matches(code)) return Result.BadCode
         val origin = OriginPolicy.forServer(data)?.allowedOriginRule ?: return Result.NotHandoff
         val tenant = tenants.all.firstOrNull { OriginPolicy.forServer(it.origin)?.allowedOriginRule == origin }

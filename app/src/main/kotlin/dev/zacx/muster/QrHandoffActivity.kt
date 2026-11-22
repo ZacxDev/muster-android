@@ -27,8 +27,22 @@ class QrHandoffActivity : Activity() {
             .setAction(Intent.ACTION_VIEW)
             .setData(intent?.data)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        runCatching { intent?.getStringExtra(QrHandoff.EXTRA_CODE) }.getOrNull()?.let { forward.putExtra(QrHandoff.EXTRA_CODE, it) }
+        val key = QrHandoff.extraCode(packageName)
+        runCatching { intent?.getStringExtra(key) }.getOrNull()?.let { forward.putExtra(key, it) }
         startActivity(forward)
         finish()
+    }
+
+    companion object {
+        /**
+         * [intent] once MainActivity has routed its hand-off: a copy without
+         * the data and the code extra ([QrHandoff.extraCode] of
+         * [packageName]). MainActivity makes it its current intent, so a
+         * recreation with no saved shell, which routes getIntent() again,
+         * opens the app plainly and not `/auth/qr#<code>` a second time.
+         * [intent] itself is not changed.
+         */
+        fun consumed(intent: Intent, packageName: String): Intent =
+            Intent(intent).setData(null).apply { removeExtra(QrHandoff.extraCode(packageName)) }
     }
 }

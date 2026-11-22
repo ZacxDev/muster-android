@@ -245,9 +245,12 @@ class MainActivity : ComponentActivity() {
         // for a server already on this phone, and never replayed from Recents.
         // 🔴 The code is never logged.
         val qr = QrHandoff.match(
-            tenants, intent.action, intent.dataString, intent.getStringExtra(QrHandoff.EXTRA_CODE),
+            tenants, packageName, intent.action, intent.dataString, intent::getStringExtra,
             fromHistory = intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0,
         )
+        // Used once: a recreation with no saved shell routes getIntent()
+        // again, and must not reopen /auth/qr#<code> (or repeat the toast).
+        if (qr != QrHandoff.Result.NotHandoff) setIntent(QrHandoffActivity.consumed(intent, packageName))
         if (qr == QrHandoff.Result.UnknownServer) Toast.makeText(this, R.string.qr_unknown_server, Toast.LENGTH_LONG).show()
         when {
             intent.action == ACTION_SETTINGS -> showServers()

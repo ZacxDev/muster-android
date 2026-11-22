@@ -24,8 +24,11 @@ class QrHandoffTest {
     private val code2 = "mqr_" + "zY9_-k".repeat(7) + "W"
     private val view = QrHandoff.ACTION_VIEW
 
+    /** This build's package: the code arrives as the extra `<package>.QR_CODE`. */
+    private val pkg = "dev.zacx.muster"
+
     private fun match(data: String?, code: String?, action: String? = view, fromHistory: Boolean = false) =
-        QrHandoff.match(tenants, action, data, code, fromHistory)
+        QrHandoff.match(tenants, pkg, action, data, mapOf("$pkg.QR_CODE" to code)::get, fromHistory)
 
     @Test
     fun aKnownServersOriginWithAValidCodeOpensItsPage() {
@@ -113,7 +116,22 @@ class QrHandoffTest {
 
     @Test
     fun noServersMeansUnknown() {
-        assertEquals(Result.UnknownServer, QrHandoff.match(Tenants(migrated = true), view, "https://alpha.example.test/auth/qr", code1))
+        assertEquals(Result.UnknownServer, QrHandoff.match(Tenants(migrated = true), pkg, view, "https://alpha.example.test/auth/qr", mapOf("$pkg.QR_CODE" to code1)::get))
+    }
+
+    /**
+     * The server names its configured package in the intent URI, so the
+     * extra is `S.<that package>.QR_CODE`: a build packaged as another id
+     * reads its own key, and never this build's literal one.
+     */
+    @Test
+    fun theCodeIsReadUnderThisBuildsOwnPackage() {
+        val other = "org.example.otherbuild"
+        assertEquals("$other.QR_CODE", QrHandoff.extraCode(other))
+        val url = "https://beta.example.test:8443/auth/qr"
+        assertEquals(Result.Open(beta, "/auth/qr#$code2"), QrHandoff.match(tenants, other, view, url, mapOf("$other.QR_CODE" to code2)::get))
+        // The literal dev.zacx.muster key is not this build's: no code.
+        assertEquals(Result.BadCode, QrHandoff.match(tenants, other, view, url, mapOf("dev.zacx.muster.QR_CODE" to code2)::get))
     }
 
     /** 🔴 The code is a sign-in secret: an Open logged by mistake must not carry it. */
