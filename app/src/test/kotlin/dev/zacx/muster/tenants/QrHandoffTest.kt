@@ -59,6 +59,8 @@ class QrHandoffTest {
     fun httpIsNotAHandoff() {
         assertEquals(Result.NotHandoff, match("http://alpha.example.test/auth/qr", code1))
         assertEquals(Result.NotHandoff, match("http://beta.example.test:8443/auth/qr", code2))
+        // Refused as not a hand-off before the code is looked at.
+        assertEquals(Result.NotHandoff, match("http://alpha.example.test/auth/qr", "mqr_bad+code"))
     }
 
     @Test
@@ -73,6 +75,7 @@ class QrHandoffTest {
         assertEquals(Result.NotHandoff, match("https://alpha.example.test/auth/qr?next=1", code1))
         assertEquals(Result.NotHandoff, match("https://alpha.example.test/auth/qr#$code1", code1))
         assertEquals(Result.NotHandoff, match("https://user@alpha.example.test/auth/qr", code1))
+        assertEquals(Result.NotHandoff, match("https://user@alpha.example.test/auth/qr", "mqr_bad+code"))
     }
 
     @Test
