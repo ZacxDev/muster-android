@@ -61,6 +61,7 @@ import dev.zacx.muster.shell.ShellRestore
 import dev.zacx.muster.shell.ShellSnapshot
 import dev.zacx.muster.shell.SnapshotOverlay
 import dev.zacx.muster.shell.SnapshotPolicy
+import dev.zacx.muster.tenants.QrHandoff
 import dev.zacx.muster.tenants.SsoOriginsRefresh
 import dev.zacx.muster.tenants.TapRouting
 import dev.zacx.muster.tenants.notifyTenant
@@ -240,8 +241,27 @@ class MainActivity : ComponentActivity() {
         // AttachmentGate says), and a tap's tenant only selects which of this
         // phone's own servers is in view.
         val target = TapRouting.resolve(tenants, intent.getStringExtra(MusterApp.EXTRA_TENANT), MusterPath.parse(intent.getStringExtra(EXTRA_PATH)))
+        // muster's QR sign-in hand-off (QrHandoffActivity passes it on): only
+        // for a server already on this phone, and never replayed from Recents.
+        // 🔴 The code is never logged.
+        val qr = QrHandoff.match(
+            tenants, packageName, intent.action, intent.dataString, intent::getStringExtra,
+            fromHistory = intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0,
+        )
+        // Used once: a recreation with no saved shell routes getIntent()
+        // again, and must not reopen /auth/qr#<code> (or repeat the toast).
+        if (qr != QrHandoff.Result.NotHandoff) setIntent(QrHandoffActivity.consumed(intent, packageName))
+        if (qr == QrHandoff.Result.UnknownServer) Toast.makeText(this, R.string.qr_unknown_server, Toast.LENGTH_LONG).show()
         when {
             intent.action == ACTION_SETTINGS -> showServers()
+            qr is QrHandoff.Result.Open -> {
+                if (tenants.active?.id != qr.tenant.id) app.tenants.select(qr.tenant.id)
+                // Always a new document: a shell already on /auth/qr would take
+                // the new fragment as a same-document navigation, and the page
+                // reads its fragment only when it loads.
+                dropWebView()
+                showShell(qr.tenant, qr.path)
+            }
             target == null -> showServerUrl(adding = false)
             else -> {
                 if (target.switched) app.tenants.select(target.tenant.id)

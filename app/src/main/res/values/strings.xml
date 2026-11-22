@@ -15,5 +15,6 @@
     <string name="url_invalid">Enter an https:// address, with no user name or password.</string>
     <string name="webview_update_title">Update Android System WebView</string>
     <string name="webview_update">A second muster server needs a newer Android System WebView, so that each server keeps its own sign-in. Update it from your app store, then add the server again. This server keeps working.</string>
+    <string name="qr_unknown_server">That muster server is not added in this app. Add it first, then scan the code again.</string>
     <string name="server_removed">Removed %1$s from this phone.</string>
 </resources>
