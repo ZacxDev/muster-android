@@ -337,6 +337,31 @@ gate's cookie landed in the browser and the shell never reached muster.
   browser, not the shell. Sign in with a provider that allows a WebView and
   advertise that provider's origin.
 
+### Signing in on a computer with this phone
+
+muster's "Sign in with the muster app" shows a QR code on the computer, for
+`https://<host>/auth/qr#mqr_<code>`. Its page on an Android phone offers
+**Open in the muster app**, a link naming this package:
+`intent://<host>/auth/qr#Intent;scheme=https;package=dev.zacx.muster;S.dev.zacx.muster.QR_CODE=<code>;…;end`.
+
+- **No App Links.** The servers are the user's own, so no host can be
+  verified for this app; the filter (`QrHandoffActivity`: VIEW, BROWSABLE,
+  `https`, any host, path `/auth/qr`) is not `autoVerify`. It does not need
+  to be: the link names the package, and Android checks a web link's domain
+  only when the intent names no package. A plain link to `/auth/qr` still
+  opens in the browser.
+- **Only a server already on this phone.** The app opens
+  `https://<host>/auth/qr#<code>` in that server's shell (switching to it)
+  only when the link's origin (scheme, host and port) is one of its servers,
+  the path is exactly `/auth/qr`, and the code is `mqr_` and
+  `[A-Za-z0-9_-]`, at most 128 characters (`QrHandoff`). An unknown server
+  opens the app with a short notice; anything else just opens the app. The
+  page then takes over: it reads the fragment, and approving asks for
+  step-up as any confirmation does.
+- 🔴 **The code is a sign-in secret.** It is never logged, reaches the page
+  only as the fragment (which no request carries), and a launch from Recents
+  never replays it.
+
 ### 🔴 Uploaded files
 
 muster serves uploaded bytes on its own origin, which is where the bridge

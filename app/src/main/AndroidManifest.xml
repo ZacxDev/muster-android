@@ -58,6 +58,33 @@
                 android:resource="@xml/shortcuts" />
         </activity>
 
+        <!-- muster's QR sign-in hand-off: the /auth/qr page's "Open in the
+             muster app" link (an intent:// URI naming this package) lands
+             here and is passed on to MainActivity (QrHandoffActivity).
+             Any https host, path /auth/qr exactly. host="*" is required: a
+             filter with no host ignores its path attributes. NOT autoVerify:
+             muster servers are the user's own, so no host can be verified
+             for this app, and none needs to be: an intent that names this
+             package is resolved within it, without the App Links domain
+             check (README). MainActivity opens it only for a server already
+             added on this phone. -->
+        <activity
+            android:name=".QrHandoffActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@android:style/Theme.NoDisplay">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" />
+                <data android:host="*" />
+                <data android:path="/auth/qr" />
+            </intent-filter>
+        </activity>
+
         <!-- The UnifiedPush receiver. Not exported: the connector's own
              receiver (exported, from its manifest) hands it messages. -->
         <service
