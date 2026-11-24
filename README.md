@@ -144,7 +144,14 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   message differs. A refusal (an expired challenge, a 4xx, no network) is
   written into the notification, buttons kept so the user can tap again; a
   question already answered or gone loses its buttons and says so; a sent one
-  is removed. A phone paired read-only gets no buttons. The inline-reply
+  is removed. A tap that ends unsent before muster is asked (the unlock
+  cancelled or not done within a minute, the prompt cancelled or
+  interrupted, another button tapped first) says why in the notification,
+  buttons kept. A second tap is refused ("Finish the open confirmation
+  first") only while a challenge is in flight, the prompt is open or an
+  answer is being sent; otherwise it takes over. Logcat tag `MusterStepUp`
+  traces each attempt's phases (never a token, nonce, signature or answer).
+  A phone paired read-only gets no buttons. The inline-reply
   Answer (`input`) is ignored like an unknown action (it needs the held-reply
   flow, not built); tapping the notification still opens the question's page.
 - **Phone settings** (long-press the launcher icon, or long-press the server

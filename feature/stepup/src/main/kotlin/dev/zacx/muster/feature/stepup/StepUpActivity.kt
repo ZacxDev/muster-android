@@ -6,12 +6,16 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.widget.Toast
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import androidx.biometric.BiometricManager.Authenticators
 import androidx.biometric.BiometricPrompt
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import dev.zacx.muster.core.model.ActionId
 import dev.zacx.muster.core.model.AskAction
@@ -20,6 +24,7 @@ import dev.zacx.muster.core.net.AskRequest
 import dev.zacx.muster.core.net.DeviceApi
 import dev.zacx.muster.core.net.SignedAsk
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.security.KeyStore
@@ -57,8 +62,11 @@ interface StepUpHost {
  * (a receiver trampoline is blocked silently on targetSdk 31+, Phase 0 S3):
  *
  * 1. Locked: `requestDismissKeyguard()` first, and go on only in
- *    `onDismissSucceeded` (a prompt behind the keyguard is cancelled). A
- *    cancelled unlock finishes and leaves the notification as it was.
+ *    `onDismissSucceeded` (a prompt behind the keyguard is cancelled). That
+ *    callback is not guaranteed, so the activity also goes on when it
+ *    resumes with the phone unlocked, and the wait is bounded
+ *    ([StepUpFlow.UNLOCK_BOUND_MS]). A cancelled, failed or timed-out unlock
+ *    says so in the notification and finishes.
  * 2. `POST /api/device/challenge`, bound to the action, the ask and the
  *    sha256 of the exact answer ([SignedAsk.prepare]).
  * 3. BiometricPrompt over a `CryptoObject(Signature)` from the step-up key,
@@ -69,127 +77,230 @@ interface StepUpHost {
  *    confirmation, so a tapped chip is NEVER sent without it.
  * 4. The signed action ([SignedAsk.send]); the outcome goes back into the
  *    notification ([StepUpHost.showOutcome]). A prompt the user cancels sends
- *    nothing and leaves the notification as it was.
+ *    nothing, and the notification says it was not sent.
+ *
+ * Every attempt ends with an outcome in the notification and finish(), or a
+ * prompt: the phases and their rules are [StepUpFlow], which this activity
+ * only adapts. Logcat tag [TAG], one line per phase change and exit.
  */
 class StepUpActivity : FragmentActivity() {
-    private var started = false
+    /** Everything the challenge gave, kept between it and the prompt. */
+    private class Ready(
+        val pairing: StepUpHost.Pairing,
+        val signature: Signature,
+        val signed: SignedAsk,
+        val prepared: SignedAsk.Prepared.Ready,
+    )
+
+    private val handler = Handler(Looper.getMainLooper())
+    private var work: Job? = null
+    private var boundTask: Runnable? = null
+    private lateinit var host: StepUpHost
+
+    private val io = object : StepUpFlow.Io<Tap, Ready> {
+        override fun isLocked() = getSystemService(KeyguardManager::class.java)?.isKeyguardLocked == true
+
+        override fun requestUnlock(attempt: Long) {
+            val km = getSystemService(KeyguardManager::class.java)
+            if (km == null) {
+                flow.unlockError(attempt)
+                return
+            }
+            km.requestDismissKeyguard(
+                this@StepUpActivity,
+                object : KeyguardManager.KeyguardDismissCallback() {
+                    override fun onDismissSucceeded() = flow.unlockSucceeded(attempt)
+                    override fun onDismissCancelled() = flow.unlockCancelled(attempt)
+                    override fun onDismissError() = flow.unlockError(attempt)
+                },
+            )
+        }
+
+        override fun prepare(attempt: Long, tap: Tap) {
+            work = lifecycleScope.launch { prepareTap(attempt, tap) }
+        }
+
+        override fun canPrompt() =
+            lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !supportFragmentManager.isStateSaved
+
+        override fun prompt(attempt: Long, tap: Tap, ready: Ready) = showPrompt(attempt, tap, ready)
+
+        override fun send(attempt: Long, tap: Tap, ready: Ready) {
+            // The same Signature the prompt's CryptoObject wrapped and the user just authenticated.
+            val s = ready.signature
+            val der = try {
+                s.update(ready.prepared.message)
+                s.sign()
+            } catch (e: Exception) {
+                null
+            }
+            if (der == null) {
+                flow.ended(attempt, "sign-failed", AskOutcome.Failed(SignedAsk.REPAIR))
+                return
+            }
+            work = lifecycleScope.launch {
+                val outcome = withContext(Dispatchers.IO) { ready.signed.send(tap.request, ready.prepared.nonce, der) }
+                flow.ended(attempt, "sent", outcome)
+            }
+        }
+
+        override fun cancelWork() {
+            work?.cancel()
+            work = null
+        }
+
+        override fun arm(attempt: Long, ms: Long) {
+            disarm()
+            val r = Runnable { flow.bound(attempt) }
+            boundTask = r
+            handler.postDelayed(r, ms)
+        }
+
+        override fun disarm() {
+            boundTask?.let { handler.removeCallbacks(it) }
+            boundTask = null
+        }
+
+        override fun showOutcome(tap: Tap, outcome: AskOutcome) =
+            host.showOutcome(tap.tenant, tap.tag, tap.title, tap.path, outcome)
+
+        override fun busy() = Toast.makeText(this@StepUpActivity, R.string.stepup_busy, Toast.LENGTH_SHORT).show()
+
+        override fun finish() = this@StepUpActivity.finish()
+
+        override fun log(line: String) {
+            Log.i(TAG, line)
+        }
+    }
+
+    private val flow: StepUpFlow<Tap, Ready> = StepUpFlow(io)
+
+    /** The phase of the open attempt (tests). */
+    internal val phase: StepUpFlow.Phase get() = flow.phase
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val tap = Tap.from(intent)
-        if (tap == null || savedInstanceState != null) {
+        val h = application as? StepUpHost
+        if (tap == null || h == null) {
+            Log.w(TAG, if (tap == null) "no tap in the intent: finishing" else "the application is not a step-up host: finishing")
             finish()
             return
         }
-        val km = getSystemService(KeyguardManager::class.java)
-        if (km != null && km.isKeyguardLocked) {
-            km.requestDismissKeyguard(
-                this,
-                object : KeyguardManager.KeyguardDismissCallback() {
-                    override fun onDismissSucceeded() = run(tap)
-                    override fun onDismissCancelled() = finish()
-                    override fun onDismissError() = finish()
-                },
-            )
+        host = h
+        if (savedInstanceState != null) {
+            // Recreated: the attempt that was open is gone with the old activity.
+            Log.i(TAG, "recreated: the open attempt is lost")
+            host.showOutcome(tap.tenant, tap.tag, tap.title, tap.path, AskOutcome.Failed(StepUpFlow.INTERRUPTED))
+            finish()
             return
         }
-        run(tap)
+        Log.i(TAG, "tap: ${tap.describe()}")
+        flow.tap(tap)
     }
 
     /**
-     * Another button tapped while this one's unlock or prompt is still up
-     * (singleInstance delivers it here, not to a new activity). The open
-     * attempt is kept and the new tap is refused, never queued: it sends
-     * nothing, and the user taps it again once the open one is done. Fails
-     * closed: no tap is ever sent without its own confirmation.
+     * Another button tapped while this activity is up (singleInstance
+     * delivers it here). Refused, never queued, only while the open attempt
+     * is genuinely busy (its challenge in flight, its prompt open or its
+     * answer being sent): the toast says so and the new tap sends nothing.
+     * Otherwise (e.g. an unlock that never reported back) the new tap takes
+     * over. Fails closed either way: no tap is sent without its own prompt.
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        if (Tap.from(intent) != null) {
-            Toast.makeText(this, R.string.stepup_busy, Toast.LENGTH_SHORT).show()
+        val tap = Tap.from(intent) ?: return
+        if (!::host.isInitialized) return
+        Log.i(TAG, "new tap: ${tap.describe()}")
+        if (flow.tap(tap)) setIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        flow.resumed()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        flow.stopped()
+    }
+
+    override fun onDestroy() {
+        if (::host.isInitialized) flow.destroyed()
+        io.disarm()
+        super.onDestroy()
+    }
+
+    /** Pairing (tap's tenant only), key, challenge: every failure ends with its own outcome. */
+    private suspend fun prepareTap(attempt: Long, tap: Tap) {
+        val pairing = host.stepUpPairing(tap.tenant)
+        if (pairing == null) {
+            flow.ended(attempt, "no-pairing", AskOutcome.Failed(SignedAsk.REVOKED))
+            return
+        }
+        val alias = pairing.keyAlias
+        if (alias == null) {
+            flow.ended(attempt, "read-only", AskOutcome.Failed(SignedAsk.READ_ONLY))
+            return
+        }
+        val signature = try {
+            val key = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(alias, null) as? PrivateKey
+            key?.let { Signature.getInstance("SHA256withECDSA").apply { initSign(it) } }
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            null // a new enrolment destroyed the key: "Re-confirm this phone"
+        } catch (e: Exception) {
+            null
+        }
+        if (signature == null) {
+            flow.ended(attempt, "no-key", AskOutcome.Failed(SignedAsk.REPAIR))
+            return
+        }
+        val signed = SignedAsk(DeviceApi(pairing.origin), pairing.token)
+        Log.i(TAG, "attempt $attempt: requesting the challenge")
+        when (val p = withContext(Dispatchers.IO) { signed.prepare(tap.request) }) {
+            is SignedAsk.Prepared.Refused -> flow.ended(attempt, "challenge-refused", p.outcome)
+            is SignedAsk.Prepared.Ready -> flow.prepared(attempt, Ready(pairing, signature, signed, p))
         }
     }
 
-    private fun run(tap: Tap) {
-        if (started) return
-        started = true
-        val host = application as? StepUpHost ?: return finish()
-        lifecycleScope.launch {
-            val pairing = host.stepUpPairing(tap.tenant)
-            val alias = pairing?.keyAlias
-            if (pairing == null || alias == null) {
-                done(host, tap, AskOutcome.Failed(if (pairing == null) SignedAsk.REVOKED else SignedAsk.READ_ONLY))
-                return@launch
-            }
-            val signature = try {
-                val key = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getKey(alias, null) as? PrivateKey
-                key?.let { Signature.getInstance("SHA256withECDSA").apply { initSign(it) } }
-            } catch (e: KeyPermanentlyInvalidatedException) {
-                null // a new enrolment destroyed the key: "Re-confirm this phone"
-            } catch (e: Exception) {
-                null
-            }
-            if (signature == null) {
-                done(host, tap, AskOutcome.Failed(SignedAsk.REPAIR))
-                return@launch
-            }
-            val signed = SignedAsk(DeviceApi(pairing.origin), pairing.token)
-            when (val p = withContext(Dispatchers.IO) { signed.prepare(tap.request) }) {
-                is SignedAsk.Prepared.Refused -> done(host, tap, p.outcome)
-                is SignedAsk.Prepared.Ready -> prompt(host, tap, pairing, signature, signed, p)
-            }
-        }
-    }
-
-    private fun prompt(
-        host: StepUpHost,
-        tap: Tap,
-        pairing: StepUpHost.Pairing,
-        signature: Signature,
-        signed: SignedAsk,
-        ready: SignedAsk.Prepared.Ready,
-    ) {
-        val info = promptInfo(tap, ready, pairing.keyTakesPin, getString(R.string.stepup_cancel))
+    private fun showPrompt(attempt: Long, tap: Tap, ready: Ready) {
+        val info = promptInfo(tap, ready.prepared, ready.pairing.keyTakesPin, getString(R.string.stepup_cancel))
         val callback = object : BiometricPrompt.AuthenticationCallback() {
             override fun onAuthenticationSucceeded(result: BiometricPrompt.AuthenticationResult) {
+                // The prompt's own CryptoObject is the one that was authenticated.
                 val s = result.cryptoObject?.signature
-                val der = try {
-                    s?.run { update(ready.message); sign() }
-                } catch (e: Exception) {
-                    null
-                }
-                if (der == null) {
-                    done(host, tap, AskOutcome.Failed(SignedAsk.REPAIR))
+                if (s == null) {
+                    flow.ended(attempt, "no-signature", AskOutcome.Failed(SignedAsk.REPAIR))
                     return
                 }
-                lifecycleScope.launch {
-                    done(host, tap, withContext(Dispatchers.IO) { signed.send(tap.request, ready.nonce, der) })
-                }
+                flow.confirmed(attempt)
             }
 
             override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
-                when (errorCode) {
-                    // The user said no: nothing is sent and the notification stays as it was.
-                    BiometricPrompt.ERROR_USER_CANCELED, BiometricPrompt.ERROR_NEGATIVE_BUTTON, BiometricPrompt.ERROR_CANCELED -> finish()
-                    else -> done(host, tap, AskOutcome.Failed("Not sent: $errString"))
+                val (why, message) = when (errorCode) {
+                    // The user said no: nothing is sent.
+                    BiometricPrompt.ERROR_USER_CANCELED, BiometricPrompt.ERROR_NEGATIVE_BUTTON -> "prompt-cancelled" to StepUpFlow.PROMPT_CANCELLED
+                    // The system took the prompt away (the screen went off, another app came up).
+                    BiometricPrompt.ERROR_CANCELED -> "prompt-interrupted" to StepUpFlow.INTERRUPTED
+                    else -> "prompt-error-$errorCode" to "Not sent: $errString"
                 }
+                flow.ended(attempt, why, AskOutcome.Failed(message))
             }
         }
         try {
             BiometricPrompt(this, ContextCompat.getMainExecutor(this), callback)
-                .authenticate(info, BiometricPrompt.CryptoObject(signature))
+                .authenticate(info, BiometricPrompt.CryptoObject(ready.signature))
+            Log.i(TAG, "attempt $attempt: prompt shown")
         } catch (e: Exception) {
-            done(host, tap, AskOutcome.Failed("Not sent: the confirmation could not be shown."))
+            flow.ended(attempt, "prompt-not-shown", AskOutcome.Failed(StepUpFlow.PROMPT_NOT_SHOWN))
         }
-    }
-
-    private fun done(host: StepUpHost, tap: Tap, outcome: AskOutcome) {
-        host.showOutcome(tap.tenant, tap.tag, tap.title, tap.path, outcome)
-        finish()
     }
 
     /** One button's tap, as the notification's PendingIntent carries it; [tenant] is the server it came from. */
     internal data class Tap(val tenant: String, val tag: String, val title: String, val path: String?, val request: AskRequest) {
+        /** For Logcat: the server, the notification and the action. Never the answer text. */
+        fun describe() = "tenant=$tenant tag=$tag action=${request.action.wire}"
+
         companion object {
             fun from(i: Intent?): Tap? {
                 i ?: return null
@@ -206,6 +317,7 @@ class StepUpActivity : FragmentActivity() {
     }
 
     companion object {
+        internal const val TAG = "MusterStepUp"
         internal const val EXTRA_TENANT = "dev.zacx.muster.stepup.TENANT"
         internal const val EXTRA_TAG = "dev.zacx.muster.stepup.TAG"
         internal const val EXTRA_TITLE = "dev.zacx.muster.stepup.TITLE"
