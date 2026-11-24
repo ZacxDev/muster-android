@@ -96,7 +96,10 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   one-time code; the app asks you to confirm, re-checks the code's expiry,
   makes the step-up key, and redeems the code at `POST /api/device/pair`.
   Re-pairing redeems first and removes the old pairing only once the new one
-  exists.
+  exists. When muster wants a fresh proof before it pairs a step-up key (403
+  `stepup_proof_required`, the code not spent), nothing changes on the
+  phone: no read-only pairing, the old pairing and its key kept, and the app
+  says to confirm on Account → Passkeys first.
 - **The step-up key:** EC P-256 in the Android Keystore, a fresh strong
   biometric on every use, destroyed by a new enrolment. A phone without a
   strong biometric offers a biometric-or-PIN key, which muster accepts only
