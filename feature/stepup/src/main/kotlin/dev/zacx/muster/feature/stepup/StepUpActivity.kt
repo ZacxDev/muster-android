@@ -69,11 +69,11 @@ internal interface StepUpSeams {
     /** A Signature initialised for signing with key [alias], or null (no key, or a new enrolment destroyed it). */
     fun signer(alias: String): Signature?
 
-    /** `POST /api/device/challenge` for [r] (blocking). */
-    fun challenge(p: StepUpHost.Pairing, r: AskRequest): SignedAsk.Prepared
+    /** `POST /api/device/challenge` for [r], off the main thread. */
+    suspend fun challenge(p: StepUpHost.Pairing, r: AskRequest): SignedAsk.Prepared
 
-    /** The signed ask action (blocking). */
-    fun send(p: StepUpHost.Pairing, r: AskRequest, nonce: String, der: ByteArray): AskOutcome
+    /** The signed ask action, off the main thread. */
+    suspend fun send(p: StepUpHost.Pairing, r: AskRequest, nonce: String, der: ByteArray): AskOutcome
 
     /** BiometricPrompt over `CryptoObject(signature)`; may throw when it cannot be shown. */
     fun authenticate(activity: FragmentActivity, info: BiometricPrompt.PromptInfo, signature: Signature, result: PromptResult)
@@ -94,10 +94,11 @@ internal interface StepUpSeams {
             null
         }
 
-        override fun challenge(p: StepUpHost.Pairing, r: AskRequest) = SignedAsk(DeviceApi(p.origin), p.token).prepare(r)
+        override suspend fun challenge(p: StepUpHost.Pairing, r: AskRequest) =
+            withContext(Dispatchers.IO) { SignedAsk(DeviceApi(p.origin), p.token).prepare(r) }
 
-        override fun send(p: StepUpHost.Pairing, r: AskRequest, nonce: String, der: ByteArray) =
-            SignedAsk(DeviceApi(p.origin), p.token).send(r, nonce, der)
+        override suspend fun send(p: StepUpHost.Pairing, r: AskRequest, nonce: String, der: ByteArray) =
+            withContext(Dispatchers.IO) { SignedAsk(DeviceApi(p.origin), p.token).send(r, nonce, der) }
 
         override fun authenticate(activity: FragmentActivity, info: BiometricPrompt.PromptInfo, signature: Signature, result: PromptResult) {
             val callback = object : BiometricPrompt.AuthenticationCallback() {
@@ -176,8 +177,12 @@ class StepUpActivity : FragmentActivity() {
             work = lifecycleScope.launch { prepareTap(attempt, tap) }
         }
 
+        // STARTED, not RESUMED: inside onResume the lifecycle still reads
+        // STARTED, so a RESUMED check would leave a challenge that came back
+        // before the resume waiting until its bound. A prompt can be shown
+        // from a started activity whose state is not saved.
         override fun canPrompt() =
-            lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) && !supportFragmentManager.isStateSaved
+            lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && !supportFragmentManager.isStateSaved
 
         override fun prompt(attempt: Long, tap: Tap, ready: Ready) = showPrompt(attempt, tap, ready)
 
@@ -195,7 +200,7 @@ class StepUpActivity : FragmentActivity() {
                 return
             }
             work = lifecycleScope.launch {
-                val outcome = withContext(Dispatchers.IO) { seams.send(ready.pairing, tap.request, ready.prepared.nonce, der) }
+                val outcome = seams.send(ready.pairing, tap.request, ready.prepared.nonce, der)
                 flow.ended(attempt, "sent", outcome)
             }
         }
@@ -315,7 +320,7 @@ class StepUpActivity : FragmentActivity() {
             return
         }
         Log.i(TAG, "attempt $attempt: requesting the challenge")
-        when (val p = withContext(Dispatchers.IO) { seams.challenge(pairing, tap.request) }) {
+        when (val p = seams.challenge(pairing, tap.request)) {
             is SignedAsk.Prepared.Refused -> flow.ended(attempt, "challenge-refused", p.outcome)
             is SignedAsk.Prepared.Ready -> flow.prepared(attempt, Ready(pairing, signature, p))
         }

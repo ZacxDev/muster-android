@@ -23,6 +23,7 @@ import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowToast
+import kotlinx.coroutines.CompletableDeferred
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.Signature
@@ -60,9 +61,9 @@ class StepUpPromptTest {
         val prompts = mutableListOf<Pair<Signature, StepUpSeams.PromptResult>>()
         val message = "muster-device-action-v1\nmdc_test".toByteArray()
         var throwOnPrompt = false
-        /** When set, [send] blocks on it (the answer stays in flight). */
-        var sendGate: java.util.concurrent.CountDownLatch? = null
-        val sending = java.util.concurrent.atomic.AtomicBoolean(false)
+        /** When set, [send] suspends on it (the answer stays in flight). */
+        var sendGate: CompletableDeferred<Unit>? = null
+        var sending = false
 
         override fun signer(alias: String): Signature {
             val kp = KeyPairGenerator.getInstance("EC").apply { initialize(256) }.generateKeyPair()
@@ -70,12 +71,12 @@ class StepUpPromptTest {
             return Signature.getInstance("SHA256withECDSA").apply { initSign(kp.private) }.also { signers += it }
         }
 
-        override fun challenge(p: StepUpHost.Pairing, r: AskRequest) = SignedAsk.Prepared.Ready("mdc_test", message, null)
+        override suspend fun challenge(p: StepUpHost.Pairing, r: AskRequest) = SignedAsk.Prepared.Ready("mdc_test", message, null)
 
-        override fun send(p: StepUpHost.Pairing, r: AskRequest, nonce: String, der: ByteArray): AskOutcome {
-            sending.set(true)
-            sendGate?.await(5, java.util.concurrent.TimeUnit.SECONDS)
-            synchronized(sent) { sent += Triple(r, nonce, der) }
+        override suspend fun send(p: StepUpHost.Pairing, r: AskRequest, nonce: String, der: ByteArray): AskOutcome {
+            sending = true
+            sent += Triple(r, nonce, der)
+            sendGate?.await()
             return AskOutcome.Done
         }
 
@@ -102,15 +103,10 @@ class StepUpPromptTest {
     private fun tapIntent(tag: String, a: AskAction = answer) =
         shadowOf(StepUpActivity.pendingIntent(app, "t1", tag, 0, "chief is asking", null, a)).savedIntent
 
-    /** Idles the main looper until [done] (the challenge and the send run on Dispatchers.IO). */
+    /** Runs the main looper (every seam answers on it, no other thread), then checks [done]. */
     private fun await(done: () -> Boolean) {
-        val until = System.currentTimeMillis() + 5_000
-        while (!done()) {
-            check(System.currentTimeMillis() < until) { "timed out" }
-            ShadowLooper.idleMainLooper()
-            Thread.sleep(5)
-        }
         ShadowLooper.idleMainLooper()
+        check(done()) { "not reached after the main looper idled" }
     }
 
     private fun openPrompt(tag: String = "attention-ask-41"): ActivityController<StepUpActivity> {
@@ -234,19 +230,17 @@ class StepUpPromptTest {
      */
     @Test
     fun aRecreateWhileSendingSaysOnceThatTheResultIsUnknown() {
-        val release = java.util.concurrent.CountDownLatch(1)
+        val release = CompletableDeferred<Unit>()
         seams.sendGate = release
         val c = openPrompt()
         val (sig, result) = seams.prompts.single()
         result.succeeded(sig)
-        await { seams.sending.get() }
+        await { seams.sending }
         assertEquals(StepUpFlow.Phase.SENDING, c.get().phase)
 
         c.recreate()
         ShadowLooper.idleMainLooper()
-        release.countDown()
-        await { seams.sent.isNotEmpty() }
-        Thread.sleep(50)
+        release.complete(Unit) // the old send's late result
         ShadowLooper.idleMainLooper()
 
         assertEquals(listOf(Shown("t1", "attention-ask-41", AskOutcome.Failed(StepUpFlow.SEND_UNKNOWN), true)), app.outcomes)
