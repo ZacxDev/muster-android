@@ -7,9 +7,9 @@ import dev.zacx.muster.core.model.ActionId
 import dev.zacx.muster.core.model.AskAction
 import dev.zacx.muster.core.model.AskOutcome
 import dev.zacx.muster.core.net.SignedAsk
+import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -22,22 +22,29 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowKeyguardManager
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowToast
+import java.util.concurrent.TimeUnit
+
+/** One outcome as the activity handed it to the host. */
+data class Shown(val tenant: String, val tag: String, val outcome: AskOutcome, val ifShowing: Boolean)
 
 /**
  * A host with no pairing for any server: reaching [stepUpPairing] is the
- * step right before `POST /api/device/challenge`, and it ends REVOKED.
+ * step right before `POST /api/device/challenge`, and it ends REVOKED. With
+ * [hang], the lookup never returns.
  */
 class UnpairedHostApp : Application(), StepUpHost {
     val asked = mutableListOf<String>()
-    val outcomes = mutableListOf<Triple<String, String, AskOutcome>>()
+    val outcomes = mutableListOf<Shown>()
+    var hang = false
 
     override suspend fun stepUpPairing(tenant: String): StepUpHost.Pairing? {
         asked += tenant
+        if (hang) CompletableDeferred<Unit>().await()
         return null
     }
 
-    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome) {
-        outcomes += Triple(tenant, tag, outcome)
+    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome, ifShowing: Boolean) {
+        outcomes += Shown(tenant, tag, outcome, ifShowing)
     }
 }
 
@@ -65,6 +72,7 @@ class StepUpLockedTapTest {
         ShadowKeyguardManager.reset()
         app.asked.clear()
         app.outcomes.clear()
+        app.hang = false
         keyguard.setKeyguardLocked(true)
     }
 
@@ -79,7 +87,7 @@ class StepUpLockedTapTest {
         ShadowLooper.idleMainLooper()
 
         assertEquals(listOf("t2"), app.asked) // the tap's own server, nothing else
-        assertEquals(listOf(Triple("t2", "t2:attention-ask-41", failed(SignedAsk.REVOKED))), app.outcomes)
+        assertEquals(listOf(Shown("t2", "t2:attention-ask-41", failed(SignedAsk.REVOKED), false)), app.outcomes)
         assertTrue(c.get().isFinishing)
     }
 
@@ -90,7 +98,7 @@ class StepUpLockedTapTest {
         ShadowLooper.idleMainLooper()
 
         assertTrue(c.get().isFinishing)
-        assertEquals(listOf(Triple("t1", "attention-ask-41", failed(StepUpFlow.UNLOCK_CANCELLED))), app.outcomes)
+        assertEquals(listOf(Shown("t1", "attention-ask-41", failed(StepUpFlow.UNLOCK_CANCELLED), true)), app.outcomes)
         assertEquals(emptyList<String>(), app.asked)
     }
 
@@ -104,11 +112,28 @@ class StepUpLockedTapTest {
         ShadowLooper.idleMainLooper()
         assertFalse(c.get().isFinishing)
 
-        ShadowLooper.idleMainLooper(StepUpFlow.UNLOCK_BOUND_MS + 1_000, java.util.concurrent.TimeUnit.MILLISECONDS)
+        ShadowLooper.idleMainLooper(StepUpFlow.UNLOCK_BOUND_MS + 1_000, TimeUnit.MILLISECONDS)
 
         assertTrue(c.get().isFinishing)
-        assertEquals(listOf(Triple("t1", "attention-ask-41", failed(StepUpFlow.UNLOCK_TIMEOUT))), app.outcomes)
+        assertEquals(listOf(Shown("t1", "attention-ask-41", failed(StepUpFlow.UNLOCK_TIMEOUT), true)), app.outcomes)
         assertEquals(emptyList<String>(), app.asked)
+    }
+
+    /**
+     * 🔴 REGRESSION (D1): unlocked at the bound with no callback, but the
+     * activity is stopped: it could not show a prompt, so it ends without
+     * asking for a challenge.
+     */
+    @Test
+    fun theBoundUnlockedWhileStoppedEndsWithoutAChallenge() {
+        val c = Robolectric.buildActivity(StepUpActivity::class.java, tapIntent("t1", "attention-ask-41", answer)).setup()
+        c.pause().stop()
+        ShadowKeyguardManager.reset() // unlocked, callback dropped
+        ShadowLooper.idleMainLooper(StepUpFlow.UNLOCK_BOUND_MS + 1_000, TimeUnit.MILLISECONDS)
+
+        assertEquals(emptyList<String>(), app.asked)
+        assertTrue(c.get().isFinishing)
+        assertEquals(listOf(Shown("t1", "attention-ask-41", failed(StepUpFlow.INTERRUPTED), true)), app.outcomes)
     }
 
     /**
@@ -120,7 +145,7 @@ class StepUpLockedTapTest {
     fun aLaterTapIsTakenWhileAnUnlockNeverReportedBack() {
         val first = tapIntent("t1", "attention-ask-41", answer)
         val c = Robolectric.buildActivity(StepUpActivity::class.java, first).setup()
-        ShadowLooper.idleMainLooper(5, java.util.concurrent.TimeUnit.SECONDS)
+        ShadowLooper.idleMainLooper(5, TimeUnit.SECONDS)
 
         // The user unlocked some other way: the shadow's pending callback is
         // dropped, as a lost callback would be. The phone is now unlocked.
@@ -134,8 +159,8 @@ class StepUpLockedTapTest {
         assertEquals(listOf("t2"), app.asked)
         assertEquals(
             listOf(
-                Triple("t1", "attention-ask-41", failed(StepUpFlow.REPLACED)),
-                Triple("t2", "t2:attention-ask-42", failed(SignedAsk.REVOKED)),
+                Shown("t1", "attention-ask-41", failed(StepUpFlow.REPLACED), true),
+                Shown("t2", "t2:attention-ask-42", failed(SignedAsk.REVOKED), false),
             ),
             app.outcomes,
         )
@@ -159,15 +184,47 @@ class StepUpLockedTapTest {
 
         assertEquals(listOf("t2"), app.asked)
         assertTrue(c.get().isFinishing)
-        assertNotEquals(emptyList<Any>(), app.outcomes)
+        assertEquals(listOf(Shown("t2", "t2:attention-ask-41", failed(SignedAsk.REVOKED), false)), app.outcomes)
     }
 
-    /** A recreated activity has lost its attempt: it says so instead of finishing silently. */
+    /**
+     * 🔴 REGRESSION: recreated (a configuration change not declared, or a
+     * forced recreate) mid-unlock: the tap is taken up again, nothing is
+     * posted, and the unlock still leads on to the challenge.
+     */
     @Test
-    fun aRecreatedActivitySaysTheAttemptWasInterrupted() {
-        val i = tapIntent("t1", "attention-ask-41", answer)
-        val c = Robolectric.buildActivity(StepUpActivity::class.java, i).create(android.os.Bundle())
+    fun aRecreateDuringTheUnlockKeepsTheTap() {
+        val c = Robolectric.buildActivity(StepUpActivity::class.java, tapIntent("t2", "t2:attention-ask-41", answer)).setup()
+        // The shadow keeps ONE callback and errors any second request made
+        // while it is held; the platform registers each request. Drop the old
+        // instance's callback (still locked) so the new instance's request is
+        // taken as the platform would take it.
+        ShadowKeyguardManager.reset()
+        keyguard.setKeyguardLocked(true)
+        c.recreate()
+        ShadowLooper.idleMainLooper()
+
+        assertFalse(c.get().isFinishing)
+        assertEquals(StepUpFlow.Phase.UNLOCKING, c.get().phase)
+        assertEquals(emptyList<Shown>(), app.outcomes)
+
+        keyguard.setKeyguardLocked(false)
+        ShadowLooper.idleMainLooper()
+        assertEquals(listOf("t2"), app.asked)
+    }
+
+    /** 🔴 REGRESSION: a lookup (or challenge) that never returns ends at its bound instead of refusing taps forever. */
+    @Test
+    fun aHungChallengeEndsAtItsBound() {
+        app.hang = true
+        ShadowKeyguardManager.reset()
+        val c = Robolectric.buildActivity(StepUpActivity::class.java, tapIntent("t1", "attention-ask-41", answer)).setup()
+        ShadowLooper.idleMainLooper()
+        assertEquals(StepUpFlow.Phase.PREPARING, c.get().phase)
+
+        ShadowLooper.idleMainLooper(StepUpFlow.PREPARE_BOUND_MS + 1_000, TimeUnit.MILLISECONDS)
+
         assertTrue(c.get().isFinishing)
-        assertEquals(listOf(Triple("t1", "attention-ask-41", failed(StepUpFlow.INTERRUPTED))), app.outcomes)
+        assertEquals(listOf(Shown("t1", "attention-ask-41", failed(StepUpFlow.PREPARE_TIMEOUT), true)), app.outcomes)
     }
 }

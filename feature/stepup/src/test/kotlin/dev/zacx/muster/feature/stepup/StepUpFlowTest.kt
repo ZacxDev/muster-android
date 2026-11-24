@@ -14,7 +14,12 @@ import org.junit.Test
 class StepUpFlowTest {
     private class FakeIo : StepUpFlow.Io<String, String> {
         var locked = false
+        var started = true
         var canPrompt = true
+        /** Run inside requestUnlock (a dismiss that reports back at once). */
+        var onUnlock: ((Long) -> Unit)? = null
+        /** Per outcome: whether it may only update a showing notification. */
+        val ifShowing = mutableListOf<Boolean>()
         val calls = mutableListOf<String>()
         val outcomes = mutableListOf<Pair<String, AskOutcome>>()
         var finished = 0
@@ -22,7 +27,11 @@ class StepUpFlowTest {
         var armed: Pair<Long, Long>? = null
 
         override fun isLocked() = locked
-        override fun requestUnlock(attempt: Long) { calls += "unlock:$attempt" }
+        override fun isStarted() = started
+        override fun requestUnlock(attempt: Long) {
+            calls += "unlock:$attempt"
+            onUnlock?.invoke(attempt)
+        }
         override fun prepare(attempt: Long, tap: String) { calls += "prepare:$attempt:$tap" }
         override fun canPrompt() = canPrompt
         override fun prompt(attempt: Long, tap: String, ready: String) { calls += "prompt:$attempt:$tap:$ready" }
@@ -30,7 +39,10 @@ class StepUpFlowTest {
         override fun cancelWork() { calls += "cancel" }
         override fun arm(attempt: Long, ms: Long) { armed = attempt to ms }
         override fun disarm() { armed = null }
-        override fun showOutcome(tap: String, outcome: AskOutcome) { outcomes += tap to outcome }
+        override fun showOutcome(tap: String, outcome: AskOutcome, ifShowing: Boolean) {
+            outcomes += tap to outcome
+            this.ifShowing += ifShowing
+        }
         override fun busy() { busy++ }
         override fun finish() { finished++ }
         override fun log(line: String) = Unit
@@ -49,6 +61,7 @@ class StepUpFlowTest {
         assertTrue(flow.tap("a"))
         assertEquals(Phase.PREPARING, flow.phase)
         assertEquals(listOf("prepare:1:a"), io.calls)
+        assertEquals(1L to StepUpFlow.PREPARE_BOUND_MS, io.armed)
     }
 
     @Test
@@ -63,6 +76,16 @@ class StepUpFlowTest {
         flow.unlockSucceeded(1)
         assertEquals(Phase.PREPARING, flow.phase)
         assertEquals(listOf("unlock:1", "prepare:1:a"), io.calls)
+        assertEquals(1L to StepUpFlow.PREPARE_BOUND_MS, io.armed) // the challenge's own bound
+    }
+
+    /** The unlock bound starts once the unlock is requested, and is not left armed when the request ended the attempt. */
+    @Test
+    fun theUnlockBoundStartsFromTheRequest() {
+        io.locked = true
+        io.onUnlock = { a -> assertEquals(null, io.armed); flow.unlockCancelled(a) }
+        flow.tap("a")
+        assertEquals(Phase.DONE, flow.phase)
         assertEquals(null, io.armed)
     }
 
@@ -72,6 +95,7 @@ class StepUpFlowTest {
         flow.tap("a")
         flow.unlockCancelled(1)
         assertEquals(listOf("a" to failed(StepUpFlow.UNLOCK_CANCELLED)), io.outcomes)
+        assertEquals(listOf(true), io.ifShowing) // never re-posts a notification that is gone
         assertEquals(1, io.finished)
         assertEquals(Phase.DONE, flow.phase)
 
@@ -141,6 +165,32 @@ class StepUpFlowTest {
         flow.bound(1)
         assertEquals(Phase.PREPARING, flow.phase)
         assertEquals(0, io.finished)
+    }
+
+    /** 🔴 D1: unlocked at the bound, but the activity is not up: it ends, and no challenge is asked for. */
+    @Test
+    fun theBoundElapsingUnlockedWhileStoppedEnds() {
+        io.locked = true
+        flow.tap("a")
+        io.locked = false
+        io.started = false
+        flow.bound(1)
+        assertEquals(emptyList<String>(), io.prepares())
+        assertEquals(listOf("a" to failed(StepUpFlow.INTERRUPTED)), io.outcomes)
+        assertEquals(1, io.finished)
+        assertTrue(flow.tap("b"))
+        assertEquals(0, io.busy)
+    }
+
+    /** 🔴 A challenge (or lookup) that never answers ends at its own bound: no endless busy refusals. */
+    @Test
+    fun aChallengeThatNeverAnswersEndsAtItsBound() {
+        flow.tap("a")
+        flow.bound(1)
+        assertEquals(listOf("a" to failed(StepUpFlow.PREPARE_TIMEOUT)), io.outcomes)
+        assertEquals(1, io.finished)
+        assertTrue(flow.tap("b"))
+        assertEquals(0, io.busy)
     }
 
     /** A tap while an unlock is pending (nothing is in flight) takes over; the old one is told. */
@@ -266,11 +316,34 @@ class StepUpFlowTest {
         assertEquals(0, io.finished)
     }
 
+    /** 🔴 Operator decision: a prompt the user cancels leaves the notification exactly as it was. */
+    @Test
+    fun aUserCancelLeavesTheNotificationAlone() {
+        flow.tap("a")
+        flow.prepared(1, "c1")
+        flow.userCancelled(1)
+        assertEquals(emptyList<Pair<String, AskOutcome>>(), io.outcomes)
+        assertEquals(1, io.finished)
+        assertEquals(emptyList<String>(), io.sends())
+        assertTrue(flow.tap("b"))
+    }
+
+    @Test
+    fun aPromptFailureOnlyUpdatesAShowingNotification() {
+        flow.tap("a")
+        flow.prepared(1, "c1")
+        flow.failed(1, "prompt-interrupted", StepUpFlow.INTERRUPTED)
+        assertEquals(listOf("a" to failed(StepUpFlow.INTERRUPTED)), io.outcomes)
+        assertEquals(listOf(true), io.ifShowing)
+        assertEquals(1, io.finished)
+    }
+
     @Test
     fun aPrepareFailureEndsWithItsOutcome() {
         flow.tap("a")
         flow.ended(1, "no-pairing", failed("why"))
         assertEquals(listOf("a" to failed("why")), io.outcomes)
+        assertEquals(listOf(false), io.ifShowing) // muster's answers and the pairing state are shown as before
         assertEquals(1, io.finished)
         flow.ended(1, "late", failed("again")) // stale
         assertEquals(1, io.outcomes.size)
@@ -279,22 +352,43 @@ class StepUpFlowTest {
     @Test
     fun destroyedMidAttemptSaysSo() {
         flow.tap("a")
-        flow.destroyed()
+        flow.destroyed(changing = false)
         assertEquals(listOf("a" to failed(StepUpFlow.INTERRUPTED)), io.outcomes)
         val sending = StepUpFlow(io)
         sending.tap("b")
         sending.prepared(1, "c")
         sending.confirmed(1)
-        sending.destroyed()
+        sending.destroyed(changing = false)
         assertEquals("b" to failed(StepUpFlow.SEND_UNKNOWN), io.outcomes.last())
+        assertEquals(listOf(true, true), io.ifShowing)
     }
 
-    /** Every outcome text the flow writes is distinct, plain and non-empty. */
+    /** A configuration change hands the tap to the new instance: the old one says nothing, so the two never contradict. */
+    @Test
+    fun destroyedForAConfigurationChangeSaysNothing() {
+        io.locked = true
+        flow.tap("a")
+        flow.destroyed(changing = true)
+        val sending = StepUpFlow(io)
+        sending.tap("b")
+        io.locked = false
+        sending.unlockSucceeded(1)
+        sending.prepared(1, "c")
+        sending.confirmed(1)
+        sending.destroyed(changing = true)
+        assertEquals(emptyList<Pair<String, AskOutcome>>(), io.outcomes)
+        assertEquals(0, io.finished)
+    }
+
+    /**
+     * INVARIANT GUARD, not regression coverage: the flow's own texts are
+     * distinct (two exits never read alike) and one is pinned whole.
+     */
     @Test
     fun outcomeTexts() {
         val all = listOf(
-            StepUpFlow.UNLOCK_CANCELLED, StepUpFlow.UNLOCK_ERROR, StepUpFlow.UNLOCK_TIMEOUT, StepUpFlow.INTERRUPTED,
-            StepUpFlow.REPLACED, StepUpFlow.PROMPT_CANCELLED, StepUpFlow.PROMPT_NOT_SHOWN, StepUpFlow.SEND_UNKNOWN,
+            StepUpFlow.UNLOCK_CANCELLED, StepUpFlow.UNLOCK_ERROR, StepUpFlow.UNLOCK_TIMEOUT, StepUpFlow.PREPARE_TIMEOUT,
+            StepUpFlow.INTERRUPTED, StepUpFlow.REPLACED, StepUpFlow.PROMPT_NOT_SHOWN, StepUpFlow.SEND_UNKNOWN,
         )
         assertEquals(all.size, all.toSet().size)
         assertEquals(

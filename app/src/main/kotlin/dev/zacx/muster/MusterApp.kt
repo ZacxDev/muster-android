@@ -129,10 +129,10 @@ class MusterApp : Application(), Configuration.Provider, StepUpHost {
         return StepUpHost.Pairing(origin, token, r.keyAlias, KeyKind.fromWire(r.keyKind) == KeyKind.BIOMETRIC_OR_CREDENTIAL)
     }
 
-    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome) {
+    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome, ifShowing: Boolean) {
         scope.launch {
             val t = tenants.read().byId(tenant) ?: return@launch
-            notifierFor(t).showOutcome(tag, title, path, outcome)
+            notifierFor(t).showOutcome(tag, title, path, outcome, ifShowing)
         }
     }
 

@@ -10,14 +10,21 @@ import dev.zacx.muster.core.model.AskOutcome
  * here, and performs what [Io] asks for.
  *
  * The rules it enforces:
- * - Every attempt ENDS: it reaches a prompt, or ends with an outcome in the
- *   notification and [Io.finish]. A dismiss callback that never comes is
- *   bounded ([UNLOCK_BOUND_MS]); a phone found unlocked on resume goes on
- *   without it. Nothing leaves an invisible activity waiting for nothing.
+ * - Every attempt ENDS: it reaches a prompt, or ends (with its reason in the
+ *   notification, or none when the user cancelled) and [Io.finish]. Each
+ *   wait is bounded: the unlock ([UNLOCK_BOUND_MS], from the moment it is
+ *   requested), the challenge ([PREPARE_BOUND_MS]) and the wait for a prompt
+ *   to be showable ([PROMPT_BOUND_MS]). A phone found unlocked on resume goes
+ *   on without the dismiss callback. Nothing leaves an invisible activity
+ *   waiting for nothing.
  * - A new tap is refused only while an attempt is genuinely busy: its
  *   challenge in flight ([Phase.PREPARING]), its prompt open
  *   ([Phase.PROMPTING]), or its answer being sent ([Phase.SENDING]). In any
  *   other phase the new tap takes over, and the one it replaces is told so.
+ * - The flow's OWN reasons (an unlock that failed, an interruption, a
+ *   replaced tap, an unknown send) only update a notification that is still
+ *   showing ([Io.showOutcome] `ifShowing`); they never post a new one. What
+ *   muster answered, and the pairing or key state, is shown as before.
  * - Fails closed: a tap is only ever sent after its own prompt succeeded
  *   ([confirmed] from [Phase.PROMPTING]); a callback for an older attempt is
  *   ignored.
@@ -26,6 +33,9 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
     /** What the activity does for the flow. Every call is on the main thread. */
     interface Io<T, P> {
         fun isLocked(): Boolean
+
+        /** Whether the activity is started (visible to the user, so a prompt can come up). */
+        fun isStarted(): Boolean
 
         /** `requestDismissKeyguard`, its callbacks reported with [attempt]. */
         fun requestUnlock(attempt: Long)
@@ -49,7 +59,8 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
         fun arm(attempt: Long, ms: Long)
         fun disarm()
 
-        fun showOutcome(tap: T, outcome: AskOutcome)
+        /** [outcome] into [tap]'s notification; with [ifShowing], only when that notification is still showing. */
+        fun showOutcome(tap: T, outcome: AskOutcome, ifShowing: Boolean)
 
         /** The "finish the open confirmation first" toast. */
         fun busy()
@@ -92,7 +103,7 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
             }
             Phase.UNLOCKING, Phase.READY -> {
                 io.log("attempt $attempt replaced by a new tap ($phase)")
-                tap?.let { io.showOutcome(it, AskOutcome.Failed(REPLACED)) }
+                tap?.let { io.showOutcome(it, AskOutcome.Failed(REPLACED), ifShowing = true) }
                 io.cancelWork()
                 io.disarm()
             }
@@ -102,9 +113,12 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
         tap = t
         ready = null
         if (io.isLocked()) {
+            val a = attempt
             move(Phase.UNLOCKING)
-            io.arm(attempt, UNLOCK_BOUND_MS)
-            io.requestUnlock(attempt)
+            io.requestUnlock(a)
+            // The bound runs from the request (the unlock UI comes up now),
+            // unless the request already ended the attempt.
+            if (a == attempt && phase == Phase.UNLOCKING) io.arm(a, UNLOCK_BOUND_MS)
         } else {
             beginPrepare()
         }
@@ -119,20 +133,20 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
 
     fun unlockCancelled(a: Long) {
         if (!current(a, Phase.UNLOCKING, "unlock cancelled")) return
-        fail("unlock-cancelled", UNLOCK_CANCELLED)
+        local("unlock-cancelled", UNLOCK_CANCELLED)
     }
 
     fun unlockError(a: Long) {
         if (!current(a, Phase.UNLOCKING, "unlock error")) return
         // The dismiss can error when the keyguard is already going away; the
         // phone may be unlocked by now.
-        if (!io.isLocked()) {
+        if (!io.isLocked() && io.isStarted()) {
             io.log("unlock error, but the phone is unlocked: going on")
             io.disarm()
             beginPrepare()
             return
         }
-        fail("unlock-error", UNLOCK_ERROR)
+        local("unlock-error", UNLOCK_ERROR)
     }
 
     /** The activity resumed: an unlock whose callback never came still goes on, and a waiting prompt shows. */
@@ -154,20 +168,25 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
      * it means the prompt could not show, so the attempt ends.
      */
     fun stopped() {
-        if (phase == Phase.PREPARING || phase == Phase.READY) fail("stopped-before-prompt", INTERRUPTED)
+        if (phase == Phase.PREPARING || phase == Phase.READY) local("stopped-before-prompt", INTERRUPTED)
     }
 
     /** The bound armed by [Io.arm] elapsed. */
     fun bound(a: Long) {
         if (a != attempt) return
         when (phase) {
-            Phase.UNLOCKING -> if (io.isLocked()) {
-                fail("unlock-timed-out", UNLOCK_TIMEOUT)
-            } else {
-                io.log("unlock bound elapsed unlocked without a dismiss callback: going on")
-                beginPrepare()
+            Phase.UNLOCKING -> when {
+                io.isLocked() -> local("unlock-timed-out", UNLOCK_TIMEOUT)
+                // Unlocked, no callback, and the activity is not up: it could
+                // never show a prompt, so no challenge is asked for.
+                !io.isStarted() -> local("unlock-bound-not-started", INTERRUPTED)
+                else -> {
+                    io.log("unlock bound elapsed unlocked without a dismiss callback: going on")
+                    beginPrepare()
+                }
             }
-            Phase.READY -> fail("prompt-never-shown", INTERRUPTED)
+            Phase.PREPARING -> local("challenge-timed-out", PREPARE_TIMEOUT)
+            Phase.READY -> local("prompt-never-shown", INTERRUPTED)
             else -> Unit
         }
     }
@@ -179,13 +198,27 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
         showPrompt()
     }
 
-    /** [prepare], [prompt] or [send] ended with [outcome] (a refusal, a failure, or the send's own result). */
+    /**
+     * [prepare] or [send] ended with [outcome]: muster's answer, or the
+     * pairing or key state. Shown as the notifier always showed it.
+     */
     fun ended(a: Long, why: String, outcome: AskOutcome) {
-        if (a != attempt || phase == Phase.IDLE || phase == Phase.DONE) {
-            io.log("stale result ignored: attempt $a ($why)")
-            return
-        }
-        finishWith(why, outcome)
+        if (!live(a, why)) return
+        finishWith(why, outcome, ifShowing = false)
+    }
+
+    /** The attempt failed on the phone for a reason of the flow's own ([message]): it only updates a showing notification. */
+    fun failed(a: Long, why: String, message: String) {
+        if (!live(a, why)) return
+        local(why, message)
+    }
+
+    /** The user cancelled the prompt: nothing is sent and the notification is left exactly as it was. */
+    fun userCancelled(a: Long) {
+        if (!current(a, Phase.PROMPTING, "user cancelled")) return
+        io.log("attempt $attempt ended in $phase: user-cancelled (notification left as it was)")
+        end()
+        io.finish()
     }
 
     /** The prompt succeeded: the only way to [Phase.SENDING]. */
@@ -197,27 +230,33 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
         io.send(a, t, r)
     }
 
-    /** The activity is being destroyed with the attempt unfinished. */
-    fun destroyed() {
-        when (phase) {
-            Phase.IDLE, Phase.DONE -> return
-            Phase.SENDING -> {
+    /**
+     * The activity is being destroyed with the attempt unfinished. For a
+     * configuration change ([changing]) the new instance takes the tap over,
+     * so nothing is shown here and the two can never post contradicting
+     * outcomes.
+     */
+    fun destroyed(changing: Boolean) {
+        if (phase == Phase.IDLE || phase == Phase.DONE) return
+        val t = tap
+        when {
+            changing -> io.log("destroyed for a configuration change: attempt $attempt ($phase) handed over")
+            phase == Phase.SENDING -> {
                 io.log("destroyed while sending: attempt $attempt")
-                tap?.let { io.showOutcome(it, AskOutcome.Failed(SEND_UNKNOWN)) }
+                t?.let { io.showOutcome(it, AskOutcome.Failed(SEND_UNKNOWN), ifShowing = true) }
             }
             else -> {
                 io.log("destroyed before sending: attempt $attempt ($phase)")
-                tap?.let { io.showOutcome(it, AskOutcome.Failed(INTERRUPTED)) }
+                t?.let { io.showOutcome(it, AskOutcome.Failed(INTERRUPTED), ifShowing = true) }
             }
         }
-        io.cancelWork()
-        io.disarm()
-        reset()
+        end()
     }
 
     private fun beginPrepare() {
         val t = tap ?: return
         move(Phase.PREPARING)
+        io.arm(attempt, PREPARE_BOUND_MS)
         io.prepare(attempt, t)
     }
 
@@ -236,23 +275,29 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
         io.prompt(attempt, t, r)
     }
 
-    private fun fail(why: String, message: String) = finishWith(why, AskOutcome.Failed(message))
+    private fun local(why: String, message: String) = finishWith(why, AskOutcome.Failed(message), ifShowing = true)
 
-    private fun finishWith(why: String, outcome: AskOutcome) {
+    private fun finishWith(why: String, outcome: AskOutcome, ifShowing: Boolean) {
         io.log("attempt $attempt ended in $phase: $why -> ${outcome::class.simpleName}")
         val t = tap
-        io.cancelWork()
-        io.disarm()
-        reset()
-        if (t != null) io.showOutcome(t, outcome)
+        end()
+        if (t != null) io.showOutcome(t, outcome, ifShowing)
         io.finish()
     }
 
     /** Ends the attempt without finishing: a later tap starts a new one. */
-    private fun reset() {
+    private fun end() {
+        io.cancelWork()
+        io.disarm()
         phase = Phase.DONE
         tap = null
         ready = null
+    }
+
+    private fun live(a: Long, why: String): Boolean {
+        if (a == attempt && phase != Phase.IDLE && phase != Phase.DONE) return true
+        io.log("stale result ignored: attempt $a ($why)")
+        return false
     }
 
     private fun current(a: Long, expected: Phase, what: String): Boolean {
@@ -267,8 +312,15 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
     }
 
     companion object {
-        /** How long a requested unlock may take before the attempt ends (the dismiss callback is not guaranteed). */
+        /** How long a requested unlock may take, from the request, before the attempt ends (the dismiss callback is not guaranteed). */
         const val UNLOCK_BOUND_MS = 60_000L
+
+        /**
+         * How long the pairing lookup and the challenge may take. Longer than
+         * the challenge request's own connect plus read timeouts, so a slow
+         * server still ends with "could not be reached".
+         */
+        const val PREPARE_BOUND_MS = 50_000L
 
         /** How long a challenge may wait for the activity to be able to show its prompt. */
         const val PROMPT_BOUND_MS = 15_000L
@@ -276,9 +328,9 @@ internal class StepUpFlow<T, P>(private val io: Io<T, P>) {
         const val UNLOCK_CANCELLED = "Not sent: the phone was not unlocked. Unlock it, then tap the button again."
         const val UNLOCK_ERROR = "Not sent: the phone could not ask to be unlocked. Unlock it, then tap the button again."
         const val UNLOCK_TIMEOUT = "Not sent: the phone was not unlocked in time. Unlock it, then tap the button again."
-        const val INTERRUPTED = "Not sent: the confirmation was interrupted before it could show. Tap the button again."
+        const val PREPARE_TIMEOUT = "Not sent: muster took too long to answer. Tap the button again."
+        const val INTERRUPTED = "Not sent: the confirmation was interrupted. Tap the button again."
         const val REPLACED = "Not sent: another button was tapped before this one was confirmed. Tap this one again to answer it."
-        const val PROMPT_CANCELLED = "Not sent: the confirmation was cancelled. Tap the button again to answer."
         const val PROMPT_NOT_SHOWN = "Not sent: the confirmation could not be shown. Tap the button again."
         const val SEND_UNKNOWN = "The answer may not have been sent. Open the question to check."
     }

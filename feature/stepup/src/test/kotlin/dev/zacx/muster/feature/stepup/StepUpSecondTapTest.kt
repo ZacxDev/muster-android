@@ -24,7 +24,7 @@ class PendingHostApp : Application(), StepUpHost {
     val outcomes = mutableListOf<Pair<String, AskOutcome>>()
     private val never = CompletableDeferred<StepUpHost.Pairing?>()
     override suspend fun stepUpPairing(tenant: String): StepUpHost.Pairing? = never.await()
-    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome) {
+    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome, ifShowing: Boolean) {
         outcomes += tag to outcome
     }
 }
