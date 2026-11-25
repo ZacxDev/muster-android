@@ -32,6 +32,10 @@ class PairingTest {
     private val oldToken = "mdv_" + "O".repeat(43)
 
     private var pinKeysAllowed = false
+    /** muster refuses any step-up key without a fresh proof (403 stepup_proof_required, code NOT spent). */
+    private var proofRequired = false
+    /** Another 403 reason muster may give for a key, with its own code. */
+    private var otherKeyRefusalCode: String? = null
     private var codeSpent = false
     private val pairBodies = mutableListOf<JsonObject>()
     private val unpairAuth = mutableListOf<String?>()
@@ -64,6 +68,8 @@ class PairingTest {
         fun s(k: String) = b[k]?.jsonPrimitive?.content
         val key = s("stepup_pubkey")
         if (key != null) {
+            if (proofRequired) return err(403, "pairing a step-up key needs a fresh proof", "stepup_proof_required")
+            otherKeyRefusalCode?.let { return err(403, "this key is refused", it) }
             if (s("stepup_key_level") == "software") return err(403, "a software-only key cannot gate actions")
             if (s("stepup_key_type") == "biometric_or_credential" && !pinKeysAllowed) {
                 return err(403, "this server does not accept biometric-or-PIN keys")
@@ -76,7 +82,11 @@ class PairingTest {
         return MockResponse.Builder().code(201).body("""{"token":"$newToken","device":$dev}""").build()
     }
 
-    private fun err(code: Int, msg: String) = MockResponse.Builder().code(code).body("""{"error":"$msg"}""").build()
+    private fun err(code: Int, msg: String, errCode: String? = null) = MockResponse.Builder().code(code)
+        .body(if (errCode == null) """{"error":"$msg"}""" else """{"error":"$msg","code":"$errCode"}""").build()
+
+    private val proofMessage = "To pair a phone that can confirm, first confirm on Account → Passkeys with a passkey or your paired phone, " +
+        "then show the pairing code again. If you have neither, reset your password by email first."
 
     private val clock = Instant.parse("2026-10-21T12:00:00Z")
     private val future = clock.plusSeconds(60)
@@ -238,6 +248,60 @@ class PairingTest {
         assertEquals(listOf("pair"), calls)
         assertEquals(oldRecord, store.value)
         assertEquals(mapOf("alias-old" to KeyKind.BIOMETRIC), keys.present)
+    }
+
+    /**
+     * 🔴 "Re-confirm this phone" when muster wants a fresh proof first: the
+     * account's existing step-up pairing and its key are KEPT, nothing is
+     * redeemed read-only (the code is not spent), and the user is told what
+     * to do.
+     */
+    @Test
+    fun aProofRequiredReconfirmKeepsTheOldPairingAndItsKey() = runTest {
+        proofRequired = true
+        val keys = FakeStepUpKeys(caps(true, true)).apply { present["alias-old"] = KeyKind.BIOMETRIC }
+        val oldRecord = DeviceRecord(origin = origin, token = oldToken, deviceId = 3, keyKind = "biometric", keyAlias = "alias-old")
+        val store = InMemoryDeviceStore(oldRecord)
+        val out = pairing(keys, store).pair(code, future, "P", "0.1.0")
+
+        assertEquals(Pairing.Outcome.Failed(proofMessage), out)
+        assertEquals(listOf("pair"), calls) // no read-only redeem, no unpair
+        assertEquals(1, pairBodies.size)
+        assertEquals(false, codeSpent)
+        assertEquals(oldRecord, store.value)
+        assertEquals(mapOf("alias-old" to KeyKind.BIOMETRIC), keys.present) // the new key is gone, the old one kept
+        assertEquals(listOf("alias-1"), keys.deleted)
+    }
+
+    /** The same for a first pairing and for a biometric-or-PIN key: the plain message, never the PIN-key note. */
+    @Test
+    fun aProofRequiredFirstPairingStoresNothing() = runTest {
+        proofRequired = true
+        pinKeysAllowed = true
+        for (c in listOf(caps(true, true), caps(false, true))) {
+            calls.clear()
+            val keys = FakeStepUpKeys(c)
+            val store = InMemoryDeviceStore(DeviceRecord(origin = origin))
+            assertEquals(Pairing.Outcome.Failed(proofMessage), pairing(keys, store).pair(code, future, "P", "0.1.0"))
+            assertEquals(listOf("pair"), calls)
+            assertEquals(DeviceRecord(origin = origin), store.value)
+            assertTrue(keys.present.isEmpty())
+        }
+        assertEquals(false, codeSpent)
+    }
+
+    /** Any other 403 for the key keeps today's behaviour: the key is dropped and the same code pairs read-only. */
+    @Test
+    fun anotherKeyRefusalStillPairsReadOnly() = runTest {
+        otherKeyRefusalCode = "key_refused"
+        val keys = FakeStepUpKeys(caps(true, true)).apply { present["alias-old"] = KeyKind.BIOMETRIC }
+        val store = InMemoryDeviceStore(DeviceRecord(origin = origin, token = oldToken, deviceId = 3, keyKind = "biometric", keyAlias = "alias-old"))
+        val out = pairing(keys, store).pair(code, future, "P", "0.1.0")
+
+        assertEquals(Pairing.Outcome.Paired(11, null, "muster refused this phone's step-up key (this key is refused). It is paired read-only."), out)
+        assertEquals(listOf("pair", "pair", "unpair"), calls)
+        assertEquals(newToken, store.value.token)
+        assertTrue(keys.present.isEmpty())
     }
 
     /** Re-pairing a phone that can no longer make a key leaves no old key behind. */

@@ -126,9 +126,11 @@ class AndroidNotifier(
      * user can try again. Never alerts. When the notification is no longer
      * showing: a Gone outcome posts nothing (the question is settled and the
      * user already let it go); a Failed one posts a SILENT notification that
-     * says it (tapping it opens [path]).
+     * says it (tapping it opens [path]) — unless [ifShowing]: then an outcome
+     * only ever updates a notification that is still showing, and posts
+     * nothing once the user let it go.
      */
-    fun showOutcome(tag: String, title: String, path: String?, outcome: AskOutcome) {
+    fun showOutcome(tag: String, title: String, path: String?, outcome: AskOutcome, ifShowing: Boolean = false) {
         val nm = NotificationManagerCompat.from(context)
         if (outcome is AskOutcome.Done) {
             nm.cancel(tag, ID)
@@ -140,7 +142,7 @@ class AndroidNotifier(
             AskOutcome.Done -> return
         }
         val shown = active(tag)
-        if (shown == null && outcome is AskOutcome.Gone) return
+        if (shown == null && (outcome is AskOutcome.Gone || ifShowing)) return
         // The body as muster sent it, never a previous outcome's text: two
         // failures in a row say the latest reason once.
         val question = shown?.extras?.getString(EXTRA_QUESTION)

@@ -21,7 +21,11 @@ import java.time.Instant
  *    alias, dropping it if the Keystore reports it as software-only;
  * 3. redeems the code with the key's public half, type and level;
  * 4. if muster refuses the KEY (403, which does not spend the code), deletes
- *    it and redeems the same code read-only, saying why;
+ *    it and redeems the same code read-only, saying why — EXCEPT when the
+ *    403 is `stepup_proof_required`: muster wants a fresh proof on the
+ *    account first, so the new key is deleted and nothing else happens (no
+ *    read-only redeem, the old pairing and its key kept), with
+ *    [PROOF_REQUIRED] for the user;
  * 5. 🔴 ONLY ONCE THE NEW PAIRING EXISTS, unpairs the phone's previous pairing
  *    with ITS credential and deletes ITS key. A refused, expired or failed
  *    re-pairing ("Re-confirm this phone") leaves the old pairing intact;
@@ -72,6 +76,11 @@ class Pairing(
         }
 
         var result = withContext(io) { api.pair(request(code, deviceName, appVersion, key, kind)) }
+        // 🔴 Only a refusal of THIS key falls back to read-only. A 403
+        // stepup_proof_required (DeviceApi.PairResult.ProofRequired) is not
+        // one: pairing read-only, and then dropping the old pairing, would
+        // destroy the account's only phone that can confirm. It fails below
+        // like any refusal: the new key deleted, the old pairing untouched.
         if (result is DeviceApi.PairResult.KeyRefused && key != null) {
             deleteKey(alias)
             note = if (kind == KeyKind.BIOMETRIC_OR_CREDENTIAL) {
@@ -135,6 +144,10 @@ class Pairing(
 
     companion object {
         const val EXPIRED = "The pairing code has expired. Tap Pair this phone again."
+
+        /** muster wants a fresh proof before it pairs a step-up key (403 `stepup_proof_required`). */
+        const val PROOF_REQUIRED = "To pair a phone that can confirm, first confirm on Account → Passkeys with a passkey or your paired phone, " +
+            "then show the pairing code again. If you have neither, reset your password by email first."
     }
 
     private fun failureMessage(r: DeviceApi.PairResult): String = when (r) {
@@ -142,6 +155,7 @@ class Pairing(
         is DeviceApi.PairResult.TooMany -> r.message.ifEmpty { "This account has the most phones it may pair. Remove one on Account → Devices." }
         is DeviceApi.PairResult.Invalid -> "muster refused the pairing request: ${r.message}"
         is DeviceApi.PairResult.KeyRefused -> "muster refused the pairing: ${r.message}"
+        is DeviceApi.PairResult.ProofRequired -> PROOF_REQUIRED
         DeviceApi.PairResult.Throttled -> "Too many pairing attempts. Wait a minute and try again."
         is DeviceApi.PairResult.Failed -> r.message
         is DeviceApi.PairResult.Paired -> error("not a failure")

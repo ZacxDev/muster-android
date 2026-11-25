@@ -9,6 +9,7 @@ import kotlinx.coroutines.CompletableDeferred
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -23,7 +24,7 @@ class PendingHostApp : Application(), StepUpHost {
     val outcomes = mutableListOf<Pair<String, AskOutcome>>()
     private val never = CompletableDeferred<StepUpHost.Pairing?>()
     override suspend fun stepUpPairing(tenant: String): StepUpHost.Pairing? = never.await()
-    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome) {
+    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome, ifShowing: Boolean) {
         outcomes += tag to outcome
     }
 }
@@ -57,5 +58,25 @@ class StepUpSecondTapTest {
         assertEquals(first, c.get().intent) // the open attempt is still the first tap
         assertFalse(c.get().isFinishing)
         assertEquals(emptyList<Pair<String, AskOutcome>>(), app.outcomes)
+    }
+
+    /**
+     * Stopped while its challenge is in flight (before any prompt): the
+     * prompt could not show, so the attempt ends with its outcome and the
+     * activity finishes rather than lingering.
+     */
+    @Test
+    fun stoppedBeforeThePromptEndsTheAttemptVisibly() {
+        app.outcomes.clear()
+        val first = tapIntent("attention-ask-41", AskAction(ActionId.ASK_ANSWER, "41", "ship it", "ship it", AskAction.Kind.OPTION))
+        val c = Robolectric.buildActivity(StepUpActivity::class.java, first).setup()
+        ShadowLooper.idleMainLooper()
+        assertEquals(StepUpFlow.Phase.PREPARING, c.get().phase)
+
+        c.pause().stop()
+        ShadowLooper.idleMainLooper()
+
+        assertTrue(c.get().isFinishing)
+        assertEquals(listOf("attention-ask-41" to (AskOutcome.Failed(StepUpFlow.INTERRUPTED) as AskOutcome)), app.outcomes)
     }
 }

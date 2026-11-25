@@ -34,7 +34,7 @@ class TwoTenantHostApp : Application(), StepUpHost {
         return pairings[tenant]
     }
 
-    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome) {
+    override fun showOutcome(tenant: String, tag: String, title: String, path: String?, outcome: AskOutcome, ifShowing: Boolean) {
         outcomes += Triple(tenant, tag, outcome)
     }
 }

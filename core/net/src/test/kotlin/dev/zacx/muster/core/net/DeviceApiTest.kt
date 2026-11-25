@@ -86,6 +86,16 @@ class DeviceApiTest {
         assertEquals(DeviceApi.PairResult.Failed("muster answered 500"), api.pair(req))
     }
 
+    /** A 403 is a refusal of the key, except muster's `stepup_proof_required`, which is told apart. */
+    @Test
+    fun aProofRequired403IsToldApartFromAKeyRefusal() {
+        server.enqueue(json(403, """{"error":"pairing a step-up key needs a fresh proof","code":"stepup_proof_required"}"""))
+        server.enqueue(json(403, """{"error":"this key is refused","code":"key_refused"}"""))
+        val req = DeviceApi.PairRequest(code, "Phone", "0.1.0")
+        assertEquals(DeviceApi.PairResult.ProofRequired("pairing a step-up key needs a fresh proof"), api.pair(req))
+        assertEquals(DeviceApi.PairResult.KeyRefused("this key is refused"), api.pair(req))
+    }
+
     /** A 201 that does not carry an mdv_-shaped credential stores nothing. */
     @Test
     fun aMalformedCredentialIsNotAccepted() {

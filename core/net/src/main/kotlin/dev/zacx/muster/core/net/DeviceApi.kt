@@ -64,6 +64,14 @@ class DeviceApi(
         /** 403: the step-up key's type or level is refused. The code is NOT spent. */
         data class KeyRefused(val message: String) : PairResult
 
+        /**
+         * 403 `stepup_proof_required`: muster pairs a step-up key only after a
+         * fresh proof on the account (a passkey or an already paired phone).
+         * The code is NOT spent. Not a refusal of THIS key: pairing read-only
+         * instead would be wrong.
+         */
+        data class ProofRequired(val message: String) : PairResult
+
         /** 401: the code is unknown, used, expired, or its session ended. */
         data class BadCode(val message: String) : PairResult
 
@@ -92,7 +100,7 @@ class DeviceApi(
                     }
                     400 -> PairResult.Invalid(errorOf(text))
                     401 -> PairResult.BadCode(errorOf(text))
-                    403 -> PairResult.KeyRefused(errorOf(text))
+                    403 -> if (codeOf(text) == STEPUP_PROOF_REQUIRED) PairResult.ProofRequired(errorOf(text)) else PairResult.KeyRefused(errorOf(text))
                     409 -> PairResult.TooMany(errorOf(text))
                     429 -> PairResult.Throttled
                     else -> PairResult.Failed("muster answered ${r.code}")
@@ -306,6 +314,9 @@ class DeviceApi(
     companion object {
         /** muster's internal/api DeviceTokenRefusal, exactly. */
         const val DEVICE_TOKEN_REFUSAL = "this route takes a paired device credential (mdv_…)"
+
+        /** muster's 403 code on POST /api/device/pair for a step-up key without a fresh proof. */
+        const val STEPUP_PROOF_REQUIRED = "stepup_proof_required"
 
         /** More advertised origins than this are not read (the shell keeps at most 8). */
         private const val MAX_ADVERTISED = 16

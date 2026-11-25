@@ -10,6 +10,7 @@
              activity finishes itself on every path. -->
         <activity
             android:name=".StepUpActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection"
             android:excludeFromRecents="true"
             android:exported="false"
             android:launchMode="singleInstance"

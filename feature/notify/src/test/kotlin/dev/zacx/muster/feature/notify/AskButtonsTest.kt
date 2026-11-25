@@ -156,6 +156,23 @@ class AskButtonsTest {
         assertEquals(0, shadowOf(nm).activeNotifications.size)
     }
 
+    /**
+     * 🔴 A step-up reason of the phone's own (ifShowing) updates a showing
+     * notification but never posts one the user already let go.
+     */
+    @Test
+    fun anIfShowingOutcomeOnlyUpdatesAShowingNotification() {
+        push("""{"id":41,"options":["ship it"]}""", all)
+        notifier.showOutcome(posted, "chief is asking", null, AskOutcome.Failed("Not sent: the confirmation was interrupted. Tap the button again."), ifShowing = true)
+        assertEquals("Not sent: the confirmation was interrupted. Tap the button again.", shown().extras.getCharSequence(Notification.EXTRA_TEXT)?.toString())
+        assertEquals(listOf("ship it", "Dismiss"), labels(shown()))
+
+        notifier.withdraw(tag)
+        assertEquals(0, shadowOf(nm).activeNotifications.size)
+        notifier.showOutcome(posted, "chief is asking", "/attention/open/ask-41", AskOutcome.Failed("Not sent: another button was tapped."), ifShowing = true)
+        assertEquals(0, shadowOf(nm).activeNotifications.size)
+    }
+
     /** NotificationCompat.setSilent: a non-summary that only the (absent) summary may alert for. */
     private fun assertSilent(n: Notification) {
         assertEquals(Notification.GROUP_ALERT_SUMMARY, n.groupAlertBehavior)

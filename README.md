@@ -96,7 +96,10 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   one-time code; the app asks you to confirm, re-checks the code's expiry,
   makes the step-up key, and redeems the code at `POST /api/device/pair`.
   Re-pairing redeems first and removes the old pairing only once the new one
-  exists.
+  exists. When muster wants a fresh proof before it pairs a step-up key (403
+  `stepup_proof_required`, the code not spent), nothing changes on the
+  phone: no read-only pairing, the old pairing and its key kept, and the app
+  says to confirm on Account → Passkeys first.
 - **The step-up key:** EC P-256 in the Android Keystore, a fresh strong
   biometric on every use, destroyed by a new enrolment. A phone without a
   strong biometric offers a biometric-or-PIN key, which muster accepts only
@@ -144,7 +147,17 @@ results are in [`docs/phase0-results.md`](docs/phase0-results.md).
   message differs. A refusal (an expired challenge, a 4xx, no network) is
   written into the notification, buttons kept so the user can tap again; a
   question already answered or gone loses its buttons and says so; a sent one
-  is removed. A phone paired read-only gets no buttons. The inline-reply
+  is removed. A tap that ends unsent on the phone (the unlock cancelled or
+  not done within a minute of asking, muster not answering the challenge,
+  the prompt interrupted, another button tapped first) says why in the
+  notification, buttons kept, but only while that notification is still
+  showing: such a reason never posts a new one. A prompt the user cancels
+  leaves the notification exactly as it was. A second tap is refused
+  ("Finish the open confirmation first") only while a challenge is in
+  flight, the prompt is open or an answer is being sent; otherwise it takes
+  over. Logcat tag `MusterStepUp`
+  traces each attempt's phases (never a token, nonce, signature or answer).
+  A phone paired read-only gets no buttons. The inline-reply
   Answer (`input`) is ignored like an unknown action (it needs the held-reply
   flow, not built); tapping the notification still opens the question's page.
 - **Phone settings** (long-press the launcher icon, or long-press the server
