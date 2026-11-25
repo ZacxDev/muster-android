@@ -153,9 +153,9 @@ Android refuses to install a lower versionCode over a higher one.
   `versionCode` by one in `app/build.gradle.kts`, and the Play bundle and the
   GitHub APK of a release are built from the same commit, with the same
   versionCode. Then a user can switch channels without an uninstall.
-- The last release is v0.4.2, versionCode **12**. The first Play upload is
-  either v0.4.2 itself (12, which Play has never seen) or the next release,
-  **13**. Every later release is higher.
+- The last release is v0.4.3, versionCode **13**. The first Play upload is
+  either v0.4.3 itself (13, which Play has never seen) or the next release,
+  **14**. Every later release is higher.
 - Never upload a Play-only build under a number a GitHub release already
   uses, or the reverse: two different builds with one versionCode cannot
   replace each other.
