@@ -36,9 +36,14 @@ import dev.zacx.muster.core.model.PayloadV2
  * - One notification per tag: a later push with the same tag replaces it, and
  *   a `resolved` withdrawal cancels it by tag, as the web worker does. A
  *   re-push marked `update` replaces it WITHOUT alerting again
- *   ([onlyAlertOnce]); a first push alerts. An `update` re-push for a tag
- *   with nothing showing (the user swiped the first away, or it was
- *   withdrawn) is dropped: a question the user dismissed does not come back.
+ *   ([onlyAlertOnce]); a first push alerts.
+ * - 🔴 RESPECT THE SWIPE ([DismissedTags]): an `update` for a tag the USER
+ *   dismissed (swiped away, cleared all — recorded by its delete intent) is
+ *   DROPPED, never posted, silently or not. A push that is not an update
+ *   shows again and clears the mark; a withdrawal clears it too. An `update`
+ *   for a tag with nothing showing for any other reason (its first push never
+ *   arrived, the app cancelled it) is posted SILENT: onlyAlertOnce quiets only
+ *   a notification that is still showing.
  * - [tap] builds the tap PendingIntent (immutable, explicit) for a path on
  *   the muster origin; the app module owns the activity it opens.
  * - 🔴 One notifier per muster server ([tenant]; muster
@@ -62,6 +67,8 @@ class AndroidNotifier(
     private val action: ActionIntents? = null,
     /** This tenant's logo; null shows none. */
     private val branding: NotifyBranding? = null,
+    /** The user's dismissals (respect the swipe). */
+    private val dismissed: DismissedTags = DismissedTags.of(context),
     private val tap: (tag: String, path: String?) -> PendingIntent,
 ) : NotificationSink {
 
@@ -88,10 +95,18 @@ class AndroidNotifier(
             return
         }
         val tag = tenant.namespace(tagOf(payload))
-        // An update with nothing showing (the user swiped the first away, or
-        // the first push never arrived) is posted SILENT: onlyAlertOnce only
-        // quiets a notification that is still showing, and dropping it instead
-        // would lose a question whose first push was lost.
+        if (payload.update) {
+            // The user swiped it away: an update never brings it back.
+            if (dismissed.isDismissed(tag)) return
+        } else {
+            // A genuine new alert for the tag: it shows, and the swipe is
+            // forgotten.
+            dismissed.clear(tag)
+        }
+        // An update with nothing showing for another reason (its first push
+        // never arrived, the app cancelled it) is posted SILENT: onlyAlertOnce
+        // only quiets a notification that is still showing, and dropping it
+        // instead would lose a question whose first push was lost.
         val silent = payload.update && active(tag) == null
         Channels.ensure(context, tenant)
         val channel = tenant.channel(Channels.forType(payload.type))
@@ -99,6 +114,7 @@ class AndroidNotifier(
         val b = base(channel, payload, icon)
             .setSilent(silent)
             .setContentIntent(tap(tag, payload.path))
+            .setDeleteIntent(DismissedTags.deleteIntent(context, tag))
             .setAutoCancel(true)
             .addExtras(Bundle().apply { putString(EXTRA_QUESTION, payload.body) })
         val ask = payload.ask
@@ -208,10 +224,13 @@ class AndroidNotifier(
         val nm = NotificationManagerCompat.from(context)
         nm.cancel(tenant.namespace(serverTag), ID)
         if (tenant.legacy) nm.cancel(serverTag, ID)
+        // Its thing is gone: a later push under the tag is news again.
+        dismissed.clear(tenant.namespace(serverTag))
     }
 
     /** The tenant was removed: every notification of its is cleared. */
     fun cancelAll() {
+        dismissed.clearPrefix(tenant.namespace(""))
         val nm = context.getSystemService(NotificationManager::class.java) ?: return
         val prefix = tenant.namespace("")
         nm.activeNotifications.filter { it.id == ID && it.tag?.startsWith(prefix) == true }.forEach { nm.cancel(it.tag, ID) }
