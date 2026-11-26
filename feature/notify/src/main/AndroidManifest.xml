@@ -2,4 +2,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Asked for at run time by the app (API 33+), right after pairing. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <application>
+        <!-- A notification's delete intent (the user swiped it away):
+             records the dismissal (DismissedTags). Not exported: only this
+             app's own PendingIntent reaches it. -->
+        <receiver
+            android:name=".DismissReceiver"
+            android:exported="false" />
+    </application>
 </manifest>
